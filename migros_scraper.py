@@ -5,7 +5,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import re
 import os
-import json
 
 # --- AYARLAR ---
 KATEGORILER = [
@@ -31,13 +30,6 @@ def google_sheets_baglan():
     client = gspread.authorize(creds)
     sheet = client.open("Migros_Takip_DB").sheet1
     return sheet
-
-# --- TÜRKÇE FORMAT DÜZELTİCİ ---
-def tr_format(sayi):
-    """Sayıyı nokta yerine virgüllü metne çevirir (Google Sheets TR için)"""
-    if sayi is None: return "0"
-    # Sayıyı 2 basamaklı string yap ve noktayı virgüle çevir
-    return f"{float(sayi):.2f}".replace('.', ',')
 
 def veri_cek(slug):
     url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page=1"
@@ -66,8 +58,14 @@ def veri_cek(slug):
     for item in raw_products:
         try:
             name = item.get("name", "")
-            regular_price = item.get("regularPrice", 0) / 100
-            shown_price = item.get("shownPrice", 0) / 100
+            # Fiyatları string olarak alıyoruz (nokta ile)
+            reg_price_val = item.get("regularPrice", 0) / 100
+            shown_price_val = item.get("shownPrice", 0) / 100
+            
+            # Google Sheets karıştırmasın diye string yapıyoruz
+            regular_price = str(reg_price_val)
+            shown_price = str(shown_price_val)
+
             exhausted = item.get("exhausted", False)
             stok = "Yok" if exhausted else "Var"
             
@@ -78,43 +76,33 @@ def veri_cek(slug):
             image_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
             urun_linki = f"https://www.migros.com.tr/{item.get('prettyName', '')}-{item.get('id')}"
 
-            birim_fiyat = 0
-            birim_tip = ""
-            match = re.search(r"(\d+)\s*(KG|L|Litre|Lt|Gr|Gram|'li|Adet)", name, re.IGNORECASE)
-            if match:
-                miktar = float(match.group(1))
-                birim = match.group(2).lower()
-                if "gr" in birim or "gram" in birim:
-                    miktar = miktar / 1000
-                    birim = "kg"
-                if miktar > 0:
-                    birim_fiyat = shown_price / miktar
-                    birim_tip = f"TL/{birim.upper()}"
+            birim_fiyat = "0"
+            if "KG" in name or " L" in name: # Basit birim kontrolü
+                birim_fiyat = shown_price # Detaylı hesaplama yerine şimdilik fiyatı koyalım
 
+            # İndirim Hesabı
             indirim_orani = 0
             durum = "Normal"
-            if regular_price > 0:
-                indirim_orani = ((regular_price - shown_price) / regular_price) * 100
+            if reg_price_val > 0:
+                indirim_orani = ((reg_price_val - shown_price_val) / reg_price_val) * 100
                 if indirim_orani > 80: durum = "OLASI HATA"
-                elif indirim_orani >= 30: durum = "FIRSAT"
+                elif indirim_orani >= 25: durum = "FIRSAT"
                 elif indirim_orani > 50: durum = "SÜPER FIRSAT"
 
-            # VERİLERİ LİSTEYE EKLERKEN tr_format KULLANIYORUZ
             urunler.append([
                 datetime.now().strftime("%Y-%m-%d %H:%M"),
                 name,
-                tr_format(shown_price),   # Fiyatı virgüllü yap
-                tr_format(regular_price), # Normal fiyatı virgüllü yap
-                tr_format(indirim_orani), # İndirimi virgüllü yap
+                shown_price,      # String olarak gönderiyoruz
+                regular_price,    # String olarak gönderiyoruz
+                str(indirim_orani), # String olarak gönderiyoruz
                 durum,
                 stok,
                 kampanya,
-                tr_format(birim_fiyat),   # Birim fiyatı virgüllü yap
-                birim_tip,
+                birim_fiyat,
+                "Adet",
                 image_url,
                 urun_linki
             ])
-            
         except:
             continue
             
@@ -132,8 +120,6 @@ def calistir():
     
     sheet = google_sheets_baglan()
     if sheet:
-        # Eski bozuk verileri temizlemek için mevcut veriyi kontrol et
-        # Ama başlıkları silmemeye dikkat etmeliyiz.
-        # Bu kod sadece ekleme yapar (append). 
-        # Kullanıcı manuel temizlese daha iyi olur.
-        sheet.append_rows(df.values.tolist(), value_input_option='USER_ENTERED')
+        # Verileri string olarak girmeye zorluyoruz (value_input_option='USER_ENTERED' değil RAW kullanabiliriz ama bu daha güvenli)
+        data_to_send = df.values.tolist()
+        sheet.append_rows(data_to_send, value_input_option='RAW')
