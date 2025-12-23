@@ -5,14 +5,26 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import re
 import os
+import time
 
-# --- AYARLAR ---
+# --- GÜNCELLENMİŞ GENİŞ KATEGORİ LİSTESİ ---
 KATEGORILER = [
-    "yag-c-7a",
-    "cay-c-6e",
-    "seker-c-7be",
-    "sut-c-6c",
-    "bakliyat-c-79"
+    "meyve-sebze-c-2",              # Meyve, Sebze
+    "et-tavuk-balik-c-3",           # Et, Tavuk, Balık
+    "sut-kahvaltilik-c-4",          # Süt, Kahvaltılık
+    "temel-gida-c-5",               # Temel Gıda (Yağ, Bakliyat vb.)
+    "meze-hazir-yemek-donuk-c-7d",  # Meze, Hazır Yemek
+    "firin-pastane-c-6",            # Fırın, Pastane
+    "dondurma-c-41b",               # Dondurma
+    "atistirmalik-c-b",             # Atıştırmalık (Cips, Çikolata vb.)
+    "icecek-c-c",                   # İçecek (Su, Kola, Meyve Suyu)
+    "deterjan-temizlik-c-d",        # Deterjan, Temizlik, Kağıt Ürünleri
+    "kisisel-bakim-kozmetik-c-e",   # Kişisel Bakım, Kozmetik
+    "bebek-c-8",                    # Bebek Ürünleri
+    "ev-yasam-c-9",                 # Ev, Yaşam
+    "kitap-kirtasiye-oyuncak-c-a",  # Kitap, Kırtasiye, Oyuncak
+    "evcil-dostlar-c-10d",          # Evcil Hayvan (Kedi, Köpek Maması vb.)
+    "elektronik-c-11"               # Elektronik
 ]
 
 def google_sheets_baglan():
@@ -31,95 +43,138 @@ def google_sheets_baglan():
     sheet = client.open("Migros_Takip_DB").sheet1
     return sheet
 
+def tr_format(sayi):
+    """Sayıyı nokta yerine virgüllü metne çevirir"""
+    if sayi is None: return "0"
+    return f"{float(sayi):.2f}".replace('.', ',')
+
 def veri_cek(slug):
-    url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page=1"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "X-PWA": "true"
-    }
+    tum_urunler = []
+    page = 1
     
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200: return []
-        data = response.json()
-    except:
-        return []
-    
-    urunler = []
-    
-    try:
-        raw_products = data["data"]["searchInfo"]["storeProductInfos"]
-    except:
+    # Güvenlik Limiti: Sonsuz döngüye girmesin diye max 100 sayfa
+    while page <= 100:
+        url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page={page}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "X-PWA": "true"
+        }
+        
         try:
-            raw_products = data["data"]["products"]
-        except:
-            return []
-
-    for item in raw_products:
-        try:
-            name = item.get("name", "")
-            # Fiyatları string olarak alıyoruz (nokta ile)
-            reg_price_val = item.get("regularPrice", 0) / 100
-            shown_price_val = item.get("shownPrice", 0) / 100
+            # Migros'a yüklenmemek için bekleme
+            time.sleep(0.3)
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                break
             
-            # Google Sheets karıştırmasın diye string yapıyoruz
-            regular_price = str(reg_price_val)
-            shown_price = str(shown_price_val)
-
-            exhausted = item.get("exhausted", False)
-            stok = "Yok" if exhausted else "Var"
+            data = response.json()
             
-            badges = item.get("badges", [])
-            kampanya = ", ".join([b.get("value", "") for b in badges]) if badges else ""
-
-            images = item.get("images", [])
-            image_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
-            urun_linki = f"https://www.migros.com.tr/{item.get('prettyName', '')}-{item.get('id')}"
-
-            birim_fiyat = "0"
-            if "KG" in name or " L" in name: # Basit birim kontrolü
-                birim_fiyat = shown_price # Detaylı hesaplama yerine şimdilik fiyatı koyalım
-
-            # İndirim Hesabı
-            indirim_orani = 0
-            durum = "Normal"
-            if reg_price_val > 0:
-                indirim_orani = ((reg_price_val - shown_price_val) / reg_price_val) * 100
-                if indirim_orani > 80: durum = "OLASI HATA"
-                elif indirim_orani >= 25: durum = "FIRSAT"
-                elif indirim_orani > 50: durum = "SÜPER FIRSAT"
-
-            urunler.append([
-                datetime.now().strftime("%Y-%m-%d %H:%M"),
-                name,
-                shown_price,      # String olarak gönderiyoruz
-                regular_price,    # String olarak gönderiyoruz
-                str(indirim_orani), # String olarak gönderiyoruz
-                durum,
-                stok,
-                kampanya,
-                birim_fiyat,
-                "Adet",
-                image_url,
-                urun_linki
-            ])
-        except:
-            continue
+            raw_products = []
+            try:
+                raw_products = data["data"]["searchInfo"]["storeProductInfos"]
+            except:
+                try:
+                    raw_products = data["data"]["products"]
+                except:
+                    pass
             
-    return urunler
+            if not raw_products:
+                break
+
+            print(f"Kategori: {slug} | Sayfa: {page} | Ürün: {len(raw_products)}")
+
+            for item in raw_products:
+                try:
+                    name = item.get("name", "")
+                    
+                    # Fiyatları al
+                    regular_price = item.get("regularPrice", 0) / 100
+                    shown_price = item.get("shownPrice", 0) / 100
+                    
+                    if regular_price == 0:
+                        regular_price = shown_price
+
+                    exhausted = item.get("exhausted", False)
+                    stok = "Yok" if exhausted else "Var"
+                    
+                    # İndirim Tipi (2 Al 1 Öde vb.)
+                    badges = item.get("badges", [])
+                    indirim_tipi = ""
+                    if badges:
+                        indirim_tipi = ", ".join([b.get("value", "") for b in badges])
+
+                    # İndirim Oranı Hesapla
+                    indirim_orani = 0
+                    durum = "Normal"
+                    
+                    if regular_price > shown_price:
+                        indirim_orani = ((regular_price - shown_price) / regular_price) * 100
+                        if indirim_orani > 50: durum = "SÜPER FIRSAT"
+                        elif indirim_orani >= 20: durum = "FIRSAT"
+                        
+                    if "Öde" in indirim_tipi or "Hediye" in indirim_tipi:
+                        durum = "ÇOKLU ALIM FIRSATI"
+
+                    images = item.get("images", [])
+                    image_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
+                    urun_linki = f"https://www.migros.com.tr/{item.get('prettyName', '')}-{item.get('id')}"
+
+                    birim_fiyat = "0"
+                    birim = "Adet"
+                    match = re.search(r"(\d+)\s*(KG|L|Litre|Lt|Gr|Gram)", name, re.IGNORECASE)
+                    if match:
+                        birim = match.group(2).upper()
+
+                    tum_urunler.append([
+                        datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        name,
+                        tr_format(regular_price),
+                        tr_format(shown_price),
+                        indirim_tipi,
+                        tr_format(indirim_orani),
+                        durum,
+                        stok,
+                        tr_format(birim_fiyat),
+                        birim,
+                        slug,
+                        image_url,
+                        urun_linki
+                    ])
+                except:
+                    continue
+            
+            page += 1
+            
+        except Exception as e:
+            print(f"Hata: {e}")
+            break
+            
+    return tum_urunler
 
 def calistir():
     tum_veriler = []
+    print("Tarama başlıyor...")
+    
+    # Tekrarlayan ürünleri engellemek için kontrol listesi
+    eklenen_urunler = set()
+    nihai_liste = []
+
     for kat in KATEGORILER:
-        tum_veriler.extend(veri_cek(kat))
-        
-    df = pd.DataFrame(tum_veriler, columns=[
-        "Tarih", "Ürün Adı", "Fiyat", "Normal Fiyat", "İndirim %", 
-        "Durum", "Stok", "Kampanya", "Birim Fiyat", "Birim", "Resim", "Link"
+        gelen_veri = veri_cek(kat)
+        for satir in gelen_veri:
+            urun_adi = satir[1]
+            # Eğer ürün daha önce eklenmediyse listeye al
+            if urun_adi not in eklenen_urunler:
+                nihai_liste.append(satir)
+                eklenen_urunler.add(urun_adi)
+    
+    df = pd.DataFrame(nihai_liste, columns=[
+        "Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi",
+        "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"
     ])
     
     sheet = google_sheets_baglan()
     if sheet:
-        # Verileri string olarak girmeye zorluyoruz (value_input_option='USER_ENTERED' değil RAW kullanabiliriz ama bu daha güvenli)
-        data_to_send = df.values.tolist()
-        sheet.append_rows(data_to_send, value_input_option='RAW')
+        # RAW formatında yazıyoruz ki Google sayıları değiştirmesin
+        sheet.append_rows(df.values.tolist(), value_input_option='RAW')
+        print(f"İşlem tamam. Toplam {len(nihai_liste)} ürün veritabanına eklendi.")
