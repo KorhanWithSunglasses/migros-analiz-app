@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from migros_scraper import google_sheets_baglan
+from migros_scraper import google_sheets_baglan, calistir  # calistir fonksiyonunu ekledik
 
-# --- SAYFA AYARLARI (Modern Görünüm İçin) ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(
     page_title="Migros Fiyat Analiz",
     page_icon="🛒",
@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Özel CSS (Daha şık görünmesi için makyaj)
+# Özel CSS
 st.markdown("""
 <style>
     .stMetric {
@@ -21,18 +21,38 @@ st.markdown("""
         border-radius: 10px;
         text-align: center;
     }
-    div[data-testid="stMetricValue"] {
-        font-size: 24px;
-        color: #ff4b4b;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("🛒 Migros Akıllı Fiyat Takip Sistemi")
 st.markdown("---")
 
+# --- SOL MENÜ ---
+with st.sidebar:
+    st.header("⚙️ Kontrol Paneli")
+    
+    # --- ROBOTU ÇALIŞTIRMA BUTONU ---
+    if st.button("🚀 Verileri Şimdi Güncelle"):
+        with st.spinner("Robot Migros'a gidiyor, fiyatlar toplanıyor... Lütfen bekleyin."):
+            try:
+                calistir() # Robotu çalıştır
+                st.success("Veriler başarıyla güncellendi!")
+                st.cache_data.clear() # Eski önbelleği temizle
+            except Exception as e:
+                st.error(f"Bir hata oluştu: {e}")
+    
+    st.divider()
+    
+    st.header("🔍 Filtreleme")
+    arama = st.text_input("Ürün Ara", placeholder="Örn: Ayçiçek Yağı")
+    secilen_durum = st.multiselect(
+        "Fırsat Durumu",
+        options=["FIRSAT", "SÜPER FIRSAT", "OLASI HATA", "Normal"],
+        default=["FIRSAT", "SÜPER FIRSAT", "OLASI HATA"]
+    )
+
 # --- VERİ ÇEKME FONKSİYONU ---
-@st.cache_data(ttl=600) # Veriyi 10 dakikada bir hatırla, siteyi hızlandırır
+@st.cache_data(ttl=600)
 def veri_getir():
     sheet = google_sheets_baglan()
     if not sheet:
@@ -41,8 +61,6 @@ def veri_getir():
     try:
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        
-        # Sayı düzeltmeleri
         if not df.empty:
             df["Fiyat"] = pd.to_numeric(df["Fiyat"], errors='coerce')
             df["Normal Fiyat"] = pd.to_numeric(df["Normal Fiyat"], errors='coerce')
@@ -50,34 +68,17 @@ def veri_getir():
             df["Tarih"] = pd.to_datetime(df["Tarih"])
         return df
     except:
-        return pd.DataFrame() # Boşsa hata verme, boş tablo dön
+        return pd.DataFrame()
 
 df = veri_getir()
 
-# --- EĞER VERİ YOKSA UYARI ---
+# --- EĞER VERİ YOKSA ---
 if df.empty:
-    st.info("👋 Hoşgeldin! Sistem kurulumu tamamlandı.")
-    st.warning("⚠️ Henüz veritabanında veri yok. Robot henüz çalışmadı. Veriler gelince burası otomatik dolacak.")
+    st.info("👋 Sistem hazır!")
+    st.warning("⚠️ Veritabanı boş. Lütfen sol menüdeki **'Verileri Şimdi Güncelle'** butonuna bas.")
     st.stop()
 
-# --- SOL MENÜ (FİLTRELER) ---
-with st.sidebar:
-    st.header("🔍 Filtreleme")
-    
-    # İsim Arama
-    arama = st.text_input("Ürün Ara", placeholder="Örn: Ayçiçek Yağı")
-    
-    # Kategori (Durum) Seçimi
-    secilen_durum = st.multiselect(
-        "Fırsat Durumu",
-        options=["FIRSAT", "SÜPER FIRSAT", "OLASI HATA", "Normal"],
-        default=["FIRSAT", "SÜPER FIRSAT", "OLASI HATA"] # Varsayılan olarak fırsatları göster
-    )
-    
-    st.caption("Veriler otomatik olarak güncellenir.")
-
-# --- VERİYİ FİLTRELEME ---
-# En son çekilen verileri al (Her ürünün son halini)
+# --- VERİ VARSA DEVAM ET ---
 df_son = df.sort_values("Tarih", ascending=False).drop_duplicates("Ürün Adı")
 
 if arama:
@@ -86,7 +87,7 @@ if arama:
 if secilen_durum:
     df_son = df_son[df_son["Durum"].isin(secilen_durum)]
 
-# --- ÜST BİLGİ KARTLARI (METRICS) ---
+# --- METRICS ---
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Toplam Takip Edilen", f"{len(df_son)} Ürün")
 col2.metric("Fırsat Sayısı", f"{len(df_son[df_son['Durum'].str.contains('FIRSAT')])} Adet")
@@ -95,7 +96,7 @@ col4.metric("Ortalama İndirim", f"%{df_son['İndirim %'].mean():.1f}")
 
 st.markdown("---")
 
-# --- ANA İÇERİK (SEKMELER) ---
+# --- SEKMELER ---
 tab_liste, tab_grafik = st.tabs(["📋 Ürün Listesi", "📈 Fiyat Analizi"])
 
 with tab_liste:
@@ -117,13 +118,7 @@ with tab_liste:
 with tab_grafik:
     st.subheader("Ürün Fiyat Geçmişi")
     grafik_urun = st.selectbox("İncelemek istediğin ürünü seç:", df_son["Ürün Adı"].unique())
-    
     if grafik_urun:
-        # Seçilen ürünün tüm tarihçesini al
         gecmis_veri = df[df["Ürün Adı"] == grafik_urun].sort_values("Tarih")
-        
-        fig = px.line(gecmis_veri, x="Tarih", y="Fiyat", 
-                     title=f"{grafik_urun} - Fiyat Değişimi",
-                     markers=True)
-        fig.update_layout(xaxis_title="Tarih", yaxis_title="Fiyat (TL)")
+        fig = px.line(gecmis_veri, x="Tarih", y="Fiyat", title=f"{grafik_urun} Fiyat Değişimi", markers=True)
         st.plotly_chart(fig, use_container_width=True)
