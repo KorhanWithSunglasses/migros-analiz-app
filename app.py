@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from migros_scraper import google_sheets_baglan, calistir  # calistir fonksiyonunu ekledik
+import time
+from migros_scraper import google_sheets_baglan, calistir
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -36,8 +37,10 @@ with st.sidebar:
         with st.spinner("Robot Migros'a gidiyor, fiyatlar toplanıyor... Lütfen bekleyin."):
             try:
                 calistir() # Robotu çalıştır
-                st.success("Veriler başarıyla güncellendi!")
+                st.success("Veriler başarıyla güncellendi! Sayfa yenileniyor...")
                 st.cache_data.clear() # Eski önbelleği temizle
+                time.sleep(1) # Yazıyı okumak için 1 saniye bekle
+                st.rerun()    # Sayfayı otomatik yenile
             except Exception as e:
                 st.error(f"Bir hata oluştu: {e}")
     
@@ -75,10 +78,11 @@ df = veri_getir()
 # --- EĞER VERİ YOKSA ---
 if df.empty:
     st.info("👋 Sistem hazır!")
-    st.warning("⚠️ Veritabanı boş. Lütfen sol menüdeki **'Verileri Şimdi Güncelle'** butonuna bas.")
+    st.warning("⚠️ Veritabanı boş veya okunurken hata oluştu. Lütfen sol menüdeki **'Verileri Şimdi Güncelle'** butonuna basın.")
     st.stop()
 
 # --- VERİ VARSA DEVAM ET ---
+# Her ürünün en son eklenen (güncel) halini al
 df_son = df.sort_values("Tarih", ascending=False).drop_duplicates("Ürün Adı")
 
 if arama:
@@ -92,7 +96,11 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Toplam Takip Edilen", f"{len(df_son)} Ürün")
 col2.metric("Fırsat Sayısı", f"{len(df_son[df_son['Durum'].str.contains('FIRSAT')])} Adet")
 col3.metric("Olası Hata", f"{len(df_son[df_son['Durum'] == 'OLASI HATA'])} Adet")
-col4.metric("Ortalama İndirim", f"%{df_son['İndirim %'].mean():.1f}")
+
+ort_indirim = df_son['İndirim %'].mean()
+if pd.isna(ort_indirim):
+    ort_indirim = 0
+col4.metric("Ortalama İndirim", f"%{ort_indirim:.1f}")
 
 st.markdown("---")
 
