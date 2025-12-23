@@ -8,7 +8,6 @@ import os
 import json
 
 # --- AYARLAR ---
-# Buraya takip edilecek kategorilerin link sonlarını (slug) yazıyoruz.
 KATEGORILER = [
     "yag-c-7a",
     "cay-c-6e",
@@ -19,23 +18,26 @@ KATEGORILER = [
 
 def google_sheets_baglan():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
     try:
-        # Siteye yükleyince çalışması için (Bulut)
         import streamlit as st
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     except:
-        # Bilgisayarda çalışması için (Yerel)
         if os.path.exists("secrets.json"):
             creds = ServiceAccountCredentials.from_json_keyfile_name("secrets.json", scope)
         else:
             return None
 
     client = gspread.authorize(creds)
-    # Google Sheet dosyasının adı
     sheet = client.open("Migros_Takip_DB").sheet1
     return sheet
+
+# --- TÜRKÇE FORMAT DÜZELTİCİ ---
+def tr_format(sayi):
+    """Sayıyı nokta yerine virgüllü metne çevirir (Google Sheets TR için)"""
+    if sayi is None: return "0"
+    # Sayıyı 2 basamaklı string yap ve noktayı virgüle çevir
+    return f"{float(sayi):.2f}".replace('.', ',')
 
 def veri_cek(slug):
     url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page=1"
@@ -44,14 +46,15 @@ def veri_cek(slug):
         "X-PWA": "true"
     }
     
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200: return []
+        data = response.json()
+    except:
         return []
-        
-    data = response.json()
+    
     urunler = []
     
-    # Veri yolunu bulmaya çalış
     try:
         raw_products = data["data"]["searchInfo"]["storeProductInfos"]
     except:
@@ -68,16 +71,13 @@ def veri_cek(slug):
             exhausted = item.get("exhausted", False)
             stok = "Yok" if exhausted else "Var"
             
-            # Kampanya
             badges = item.get("badges", [])
             kampanya = ", ".join([b.get("value", "") for b in badges]) if badges else ""
 
-            # Resim ve Link
             images = item.get("images", [])
             image_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
             urun_linki = f"https://www.migros.com.tr/{item.get('prettyName', '')}-{item.get('id')}"
 
-            # Birim Fiyat (Regex)
             birim_fiyat = 0
             birim_tip = ""
             match = re.search(r"(\d+)\s*(KG|L|Litre|Lt|Gr|Gram|'li|Adet)", name, re.IGNORECASE)
@@ -91,18 +91,28 @@ def veri_cek(slug):
                     birim_fiyat = shown_price / miktar
                     birim_tip = f"TL/{birim.upper()}"
 
-            # Fırsat Durumu
             indirim_orani = 0
             durum = "Normal"
             if regular_price > 0:
                 indirim_orani = ((regular_price - shown_price) / regular_price) * 100
                 if indirim_orani > 80: durum = "OLASI HATA"
                 elif indirim_orani >= 30: durum = "FIRSAT"
+                elif indirim_orani > 50: durum = "SÜPER FIRSAT"
 
+            # VERİLERİ LİSTEYE EKLERKEN tr_format KULLANIYORUZ
             urunler.append([
                 datetime.now().strftime("%Y-%m-%d %H:%M"),
-                name, shown_price, regular_price, indirim_orani, 
-                durum, stok, kampanya, birim_fiyat, birim_tip, image_url, urun_linki
+                name,
+                tr_format(shown_price),   # Fiyatı virgüllü yap
+                tr_format(regular_price), # Normal fiyatı virgüllü yap
+                tr_format(indirim_orani), # İndirimi virgüllü yap
+                durum,
+                stok,
+                kampanya,
+                tr_format(birim_fiyat),   # Birim fiyatı virgüllü yap
+                birim_tip,
+                image_url,
+                urun_linki
             ])
             
         except:
@@ -122,7 +132,8 @@ def calistir():
     
     sheet = google_sheets_baglan()
     if sheet:
-        mevcut = sheet.get_all_values()
-        if not mevcut:
-            sheet.append_row(df.columns.tolist())
-        sheet.append_rows(df.values.tolist())
+        # Eski bozuk verileri temizlemek için mevcut veriyi kontrol et
+        # Ama başlıkları silmemeye dikkat etmeliyiz.
+        # Bu kod sadece ekleme yapar (append). 
+        # Kullanıcı manuel temizlese daha iyi olur.
+        sheet.append_rows(df.values.tolist(), value_input_option='USER_ENTERED')
