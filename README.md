@@ -1,0 +1,1 @@
+# migros-analiz-app
