@@ -7,24 +7,14 @@ import re
 import os
 import time
 
-# --- GÜNCELLENMİŞ GENİŞ KATEGORİ LİSTESİ ---
+# --- KATEGORİLER ---
 KATEGORILER = [
-    "meyve-sebze-c-2",              # Meyve, Sebze
-    "et-tavuk-balik-c-3",           # Et, Tavuk, Balık
-    "sut-kahvaltilik-c-4",          # Süt, Kahvaltılık
-    "temel-gida-c-5",               # Temel Gıda (Yağ, Bakliyat vb.)
-    "meze-hazir-yemek-donuk-c-7d",  # Meze, Hazır Yemek
-    "firin-pastane-c-6",            # Fırın, Pastane
-    "dondurma-c-41b",               # Dondurma
-    "atistirmalik-c-b",             # Atıştırmalık (Cips, Çikolata vb.)
-    "icecek-c-c",                   # İçecek (Su, Kola, Meyve Suyu)
-    "deterjan-temizlik-c-d",        # Deterjan, Temizlik, Kağıt Ürünleri
-    "kisisel-bakim-kozmetik-c-e",   # Kişisel Bakım, Kozmetik
-    "bebek-c-8",                    # Bebek Ürünleri
-    "ev-yasam-c-9",                 # Ev, Yaşam
-    "kitap-kirtasiye-oyuncak-c-a",  # Kitap, Kırtasiye, Oyuncak
-    "evcil-dostlar-c-10d",          # Evcil Hayvan (Kedi, Köpek Maması vb.)
-    "elektronik-c-11"               # Elektronik
+    "meyve-sebze-c-2", "et-tavuk-balik-c-3", "sut-kahvaltilik-c-4",
+    "temel-gida-c-5", "meze-hazir-yemek-donuk-c-7d", "firin-pastane-c-6",
+    "dondurma-c-41b", "atistirmalik-c-b", "icecek-c-c",
+    "deterjan-temizlik-c-d", "kisisel-bakim-kozmetik-c-e", "bebek-c-8",
+    "ev-yasam-c-9", "kitap-kirtasiye-oyuncak-c-a", "evcil-dostlar-c-10d",
+    "elektronik-c-11"
 ]
 
 def google_sheets_baglan():
@@ -38,37 +28,46 @@ def google_sheets_baglan():
             creds = ServiceAccountCredentials.from_json_keyfile_name("secrets.json", scope)
         else:
             return None
-
     client = gspread.authorize(creds)
     sheet = client.open("Migros_Takip_DB").sheet1
     return sheet
 
 def tr_format(sayi):
-    """Sayıyı nokta yerine virgüllü metne çevirir"""
     if sayi is None: return "0"
     return f"{float(sayi):.2f}".replace('.', ',')
+
+# --- YENİ: KAMPANYA TEMİZLEYİCİ ---
+def kampanya_temizle(badges):
+    """Badges listesindeki anlamsız fiyatları ve kodları temizler."""
+    temiz_kampanyalar = []
+    for b in badges:
+        val = b.get("value", "")
+        if not val: continue
+        
+        # İçinde "TL" geçen veya sadece rakam/nokta/virgülden oluşanları at
+        # Örn: "249,95 TL" veya "59.90" gibi değerleri filtrele
+        if "TL" in val or re.match(r'^[\d.,]+$', val.strip()):
+            continue
+            
+        # Kalan anlamlı metinleri (Örn: "2 Al 1 Öde") listeye ekle
+        temiz_kampanyalar.append(val)
+        
+    return ", ".join(temiz_kampanyalar) if temiz_kampanyalar else ""
 
 def veri_cek(slug):
     tum_urunler = []
     page = 1
-    
-    # Güvenlik Limiti: Sonsuz döngüye girmesin diye max 100 sayfa
-    while page <= 100:
+    # Güvenlik Limiti: Max 80 sayfa (Migros genelde 50-60 sayfa oluyor)
+    while page <= 80:
         url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page={page}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "X-PWA": "true"
-        }
+        headers = {"User-Agent": "Mozilla/5.0", "X-PWA": "true"}
         
         try:
-            # Migros'a yüklenmemek için bekleme
-            time.sleep(0.3)
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code != 200:
-                break
+            time.sleep(0.4) # Biraz daha yavaşlayalım, banlanmayalım
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code != 200: break
             
             data = response.json()
-            
             raw_products = []
             try:
                 raw_products = data["data"]["searchInfo"]["storeProductInfos"]
@@ -78,41 +77,32 @@ def veri_cek(slug):
                 except:
                     pass
             
-            if not raw_products:
-                break
+            if not raw_products: break
 
             print(f"Kategori: {slug} | Sayfa: {page} | Ürün: {len(raw_products)}")
 
             for item in raw_products:
                 try:
                     name = item.get("name", "")
-                    
-                    # Fiyatları al
                     regular_price = item.get("regularPrice", 0) / 100
                     shown_price = item.get("shownPrice", 0) / 100
-                    
-                    if regular_price == 0:
-                        regular_price = shown_price
+                    if regular_price == 0: regular_price = shown_price
 
                     exhausted = item.get("exhausted", False)
                     stok = "Yok" if exhausted else "Var"
                     
-                    # İndirim Tipi (2 Al 1 Öde vb.)
+                    # YENİ FONKSİYONU KULLAN
                     badges = item.get("badges", [])
-                    indirim_tipi = ""
-                    if badges:
-                        indirim_tipi = ", ".join([b.get("value", "") for b in badges])
+                    indirim_tipi = kampanya_temizle(badges)
 
-                    # İndirim Oranı Hesapla
                     indirim_orani = 0
                     durum = "Normal"
-                    
                     if regular_price > shown_price:
                         indirim_orani = ((regular_price - shown_price) / regular_price) * 100
                         if indirim_orani > 50: durum = "SÜPER FIRSAT"
                         elif indirim_orani >= 20: durum = "FIRSAT"
                         
-                    if "Öde" in indirim_tipi or "Hediye" in indirim_tipi:
+                    if "Öde" in indirim_tipi or "Hediye" in indirim_tipi or "İkincisi" in indirim_tipi:
                         durum = "ÇOKLU ALIM FIRSATI"
 
                     images = item.get("images", [])
@@ -142,39 +132,38 @@ def veri_cek(slug):
                     ])
                 except:
                     continue
-            
             page += 1
-            
-        except Exception as e:
-            print(f"Hata: {e}")
+        except:
             break
-            
     return tum_urunler
 
 def calistir():
-    tum_veriler = []
     print("Tarama başlıyor...")
-    
-    # Tekrarlayan ürünleri engellemek için kontrol listesi
     eklenen_urunler = set()
-    nihai_liste = []
+    sheet = google_sheets_baglan()
+    
+    if not sheet: return
 
     for kat in KATEGORILER:
-        gelen_veri = veri_cek(kat)
-        for satir in gelen_veri:
+        print(f"{kat} taranıyor...")
+        kategori_verisi = veri_cek(kat)
+        yazilacak_liste = []
+        
+        for satir in kategori_verisi:
             urun_adi = satir[1]
-            # Eğer ürün daha önce eklenmediyse listeye al
             if urun_adi not in eklenen_urunler:
-                nihai_liste.append(satir)
+                yazilacak_liste.append(satir)
                 eklenen_urunler.add(urun_adi)
-    
-    df = pd.DataFrame(nihai_liste, columns=[
-        "Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi",
-        "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"
-    ])
-    
-    sheet = google_sheets_baglan()
-    if sheet:
-        # RAW formatında yazıyoruz ki Google sayıları değiştirmesin
-        sheet.append_rows(df.values.tolist(), value_input_option='RAW')
-        print(f"İşlem tamam. Toplam {len(nihai_liste)} ürün veritabanına eklendi.")
+        
+        if yazilacak_liste:
+            try:
+                sheet.append_rows(yazilacak_liste, value_input_option='RAW')
+                print(f"✅ {kat}: {len(yazilacak_liste)} ürün yazıldı.")
+            except:
+                time.sleep(5) # Hata olursa 5sn bekle
+                try: sheet.append_rows(yazilacak_liste, value_input_option='RAW')
+                except: pass
+        
+        time.sleep(3) # Kategori arası bekleme
+
+    print("🎉 Tüm işlem tamamlandı.")
