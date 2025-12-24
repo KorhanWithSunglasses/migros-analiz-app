@@ -23,7 +23,7 @@ def go_home():
     st.session_state.selected_product = None
     st.session_state.page = 'home'
 
-# --- CSS TASARIMI (SOFT UI & DEĞİŞİM ETİKETLERİ) ---
+# --- CSS (SOFT UI & DEĞİŞİM ETİKETLERİ) ---
 is_dark = st.session_state.theme == 'dark'
 bg_color = "#121212" if is_dark else "#f8f9fa"
 card_bg = "#1e1e1e" if is_dark else "#ffffff"
@@ -44,7 +44,7 @@ st.markdown(f"""
         padding: 15px;
         box-shadow: {shadow};
         transition: transform 0.2s ease;
-        position: relative; /* Etiketler için gerekli */
+        position: relative;
     }}
     div[data-testid="stVerticalBlockBorderWrapper"]:hover {{
         border-color: #ff6000;
@@ -99,6 +99,12 @@ def temizle_ve_cevir(val):
         return float(s)
     except: return 0.0
 
+def linki_duzelt(link):
+    """Linklerin sonundaki boşlukları ve hataları temizler"""
+    if not link or pd.isna(link): return "#"
+    link = str(link).strip()
+    return link
+
 @st.cache_data(ttl=600)
 def veri_getir():
     client = google_sheets_baglan()
@@ -115,6 +121,8 @@ def veri_getir():
         for c in ["Etiket Fiyatı", "Satış Fiyatı", "İndirim %"]:
             if c in df.columns: df[c] = df[c].apply(temizle_ve_cevir)
         if "Tarih" in df.columns: df["Tarih"] = pd.to_datetime(df["Tarih"], errors='coerce')
+        if "Link" in df.columns: df["Link"] = df["Link"].apply(linki_duzelt) # Linkleri temizle
+            
         return df
     except: return pd.DataFrame()
 
@@ -128,7 +136,7 @@ if df_raw.empty:
 # 1. Önce Veriyi Tarih ve Ürün Adına Göre Sırala
 df_sorted = df_raw.sort_values(["Ürün Adı", "Tarih"])
 
-# 2. Önceki Fiyatı Hesapla (Shift Yöntemi)
+# 2. Önceki Fiyatı Hesapla (Shift Yöntemi) - SADECE "SATIŞ FİYATI" (SON FİYAT) ÜZERİNDEN
 df_sorted['Önceki Fiyat'] = df_sorted.groupby("Ürün Adı")["Satış Fiyatı"].shift(1)
 
 # 3. Son Güncel Durumu Al
@@ -175,6 +183,7 @@ if st.session_state.page == 'detail':
         s3.markdown(f"<div class='stat-box'><div class='stat-val' style='color:#e74c3c'>{gecmis['Satış Fiyatı'].max():.1f} ₺</div><div class='stat-lbl'>En Yüksek</div></div>", unsafe_allow_html=True)
 
     st.markdown("### 📉 Fiyat Geçmişi Analizi")
+    # Grafik Çizerken de "Satış Fiyatı"nı (Son Fiyatı) baz alıyoruz
     fig = px.line(gecmis, x="Tarih", y="Satış Fiyatı", markers=True)
     fig.update_traces(line_color="#ff6000", line_width=4, marker_size=10, marker_color="white", marker_line_width=2)
     
@@ -214,6 +223,7 @@ else:
     # 1. Değişenler Filtresi (En Önemlisi)
     if sadece_degisenler:
         # Önceki fiyatı olup da (yeni ürün değil), şimdiki fiyatı farklı olanları getir
+        # "Satış Fiyatı" (Son Fiyat) değişmişse değişim var demektir.
         df = df[df['Önceki Fiyat'].notna() & (df['Satış Fiyatı'] != df['Önceki Fiyat'])]
         if df.empty:
             st.info("Son güncellemede fiyatı değişen ürün bulunamadı.")
@@ -252,7 +262,7 @@ else:
                 else: st.markdown(f"<div>{price_html}</div>", unsafe_allow_html=True)
                 
                 # --- FİYAT DEĞİŞİM ETİKETLERİ ---
-                # Eğer önceki fiyat varsa ve farklıysa göster
+                # "Satış Fiyatı" (Son Fiyat) baz alınarak değişim hesabı
                 if pd.notna(row['Önceki Fiyat']) and row['Önceki Fiyat'] != 0:
                     fark = row['Satış Fiyatı'] - row['Önceki Fiyat']
                     if fark < 0: # Fiyat Düşmüş
