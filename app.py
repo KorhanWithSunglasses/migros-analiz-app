@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import math
 import time
+import re
 import plotly.express as px
 from migros_scraper import google_sheets_baglan, calistir
 
@@ -23,7 +24,7 @@ def go_home():
     st.session_state.selected_product = None
     st.session_state.page = 'home'
 
-# --- CSS (SOFT UI & DEĞİŞİM ETİKETLERİ) ---
+# --- CSS ---
 is_dark = st.session_state.theme == 'dark'
 bg_color = "#121212" if is_dark else "#f8f9fa"
 card_bg = "#1e1e1e" if is_dark else "#ffffff"
@@ -36,7 +37,6 @@ st.markdown(f"""
     .stApp {{ background-color: {bg_color}; }}
     .block-container {{ padding-top: 2rem; padding-bottom: 5rem; }}
     
-    /* KART TASARIMI */
     div[data-testid="stVerticalBlockBorderWrapper"] {{
         background-color: {card_bg};
         border: 1px solid {border_color};
@@ -67,7 +67,6 @@ st.markdown(f"""
     .price-tag {{ font-size: 20px; font-weight: 800; color: #ff6000; }}
     .old-price {{ font-size: 13px; text-decoration: line-through; color: #888; margin-right: 8px; }}
     
-    /* FİYAT DEĞİŞİM ETİKETLERİ */
     .change-badge-down {{
         background-color: #dcfce7; color: #166534; border: 1px solid #bbf7d0;
         font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 6px;
@@ -99,10 +98,19 @@ def temizle_ve_cevir(val):
         return float(s)
     except: return 0.0
 
+# --- KRİTİK DÜZELTME: LİNK TAMİRCİSİ ---
 def linki_duzelt(link):
-    """Linklerin sonundaki boşlukları ve hataları temizler"""
-    if not link or pd.isna(link): return "#"
-    link = str(link).strip()
+    """Bozuk linklerdeki fazla ID'yi siler ve 404 hatasını çözer"""
+    if not isinstance(link, str): return "#"
+    
+    # Eğer linkte '-p-' varsa (Migros formatı) ve sonu uzun bir rakamla bitiyorsa
+    # Örn: .../sut-p-123abc-200000 -> .../sut-p-123abc yapar.
+    if "-p-" in link:
+        # Regex: (Her şey + -p- + kod) + (-tire ve rakamlar)
+        match = re.search(r"(.*-p-[a-z0-9]+)(-\d+)$", link)
+        if match:
+            return match.group(1) # Sondaki tireli rakamı at, gerisini döndür
+            
     return link
 
 @st.cache_data(ttl=600)
@@ -121,33 +129,26 @@ def veri_getir():
         for c in ["Etiket Fiyatı", "Satış Fiyatı", "İndirim %"]:
             if c in df.columns: df[c] = df[c].apply(temizle_ve_cevir)
         if "Tarih" in df.columns: df["Tarih"] = pd.to_datetime(df["Tarih"], errors='coerce')
-        if "Link" in df.columns: df["Link"] = df["Link"].apply(linki_duzelt) # Linkleri temizle
+        
+        # LİNKLERİ BURADA TAMİR EDİYORUZ
+        if "Link" in df.columns: df["Link"] = df["Link"].apply(linki_duzelt)
             
         return df
     except: return pd.DataFrame()
 
-# --- VERİ HAZIRLIĞI VE DEĞİŞİM HESABI ---
+# --- VERİ HAZIRLIĞI ---
 df_raw = veri_getir()
 if df_raw.empty:
     st.error("Veri bağlantısı kurulamadı.")
     if st.button("Tekrar Dene"): st.rerun()
     st.stop()
 
-# 1. Önce Veriyi Tarih ve Ürün Adına Göre Sırala
 df_sorted = df_raw.sort_values(["Ürün Adı", "Tarih"])
-
-# 2. Önceki Fiyatı Hesapla (Shift Yöntemi) - SADECE "SATIŞ FİYATI" (SON FİYAT) ÜZERİNDEN
 df_sorted['Önceki Fiyat'] = df_sorted.groupby("Ürün Adı")["Satış Fiyatı"].shift(1)
-
-# 3. Son Güncel Durumu Al
 df_vitrin = df_sorted.drop_duplicates("Ürün Adı", keep='last')
-
-# 4. Değişim Miktarını Hesapla
 df_vitrin['Fiyat Farkı'] = df_vitrin['Satış Fiyatı'] - df_vitrin['Önceki Fiyat']
 
-# =======================================================
-# EKRAN: DETAY SAYFASI
-# =======================================================
+# --- DETAY SAYFASI ---
 if st.session_state.page == 'detail':
     urun_adi = st.session_state.selected_product
     gecmis = df_raw[df_raw["Ürün Adı"] == urun_adi].sort_values("Tarih")
@@ -183,18 +184,14 @@ if st.session_state.page == 'detail':
         s3.markdown(f"<div class='stat-box'><div class='stat-val' style='color:#e74c3c'>{gecmis['Satış Fiyatı'].max():.1f} ₺</div><div class='stat-lbl'>En Yüksek</div></div>", unsafe_allow_html=True)
 
     st.markdown("### 📉 Fiyat Geçmişi Analizi")
-    # Grafik Çizerken de "Satış Fiyatı"nı (Son Fiyatı) baz alıyoruz
     fig = px.line(gecmis, x="Tarih", y="Satış Fiyatı", markers=True)
     fig.update_traces(line_color="#ff6000", line_width=4, marker_size=10, marker_color="white", marker_line_width=2)
-    
     grid_color = "#333" if is_dark else "#eee"
     text_c = "#eee" if is_dark else "#333"
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color=text_c, xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor=grid_color))
     st.plotly_chart(fig, use_container_width=True)
 
-# =======================================================
-# EKRAN: ANA SAYFA (VİTRİN)
-# =======================================================
+# --- ANA SAYFA ---
 else:
     with st.sidebar:
         st.title("🛒 Migros Avcısı")
@@ -205,11 +202,8 @@ else:
         kat_list = ["Tümü"] + sorted(df_vitrin["Kategori"].astype(str).unique().tolist()) if "Kategori" in df_vitrin.columns else ["Tümü"]
         kategori = st.selectbox("📂 Kategori", kat_list)
         sirala = st.selectbox("🔃 Sıralama", ["Akıllı (Fırsatlar)", "Fiyat Artan", "Fiyat Azalan"])
-        
         st.markdown("---")
-        # YENİ BUTON: FİYATI DEĞİŞENLER
         sadece_degisenler = st.toggle("🔔 Fiyatı Değişenler", value=False)
-        
         st.divider()
         if st.button("🚀 Verileri Güncelle"):
             with st.spinner("Güncelleniyor..."):
@@ -217,21 +211,14 @@ else:
                 st.cache_data.clear()
                 st.rerun()
 
-    # --- FİLTRELEME MANTIĞI ---
     df = df_vitrin.copy()
-    
-    # 1. Değişenler Filtresi (En Önemlisi)
     if sadece_degisenler:
-        # Önceki fiyatı olup da (yeni ürün değil), şimdiki fiyatı farklı olanları getir
-        # "Satış Fiyatı" (Son Fiyat) değişmişse değişim var demektir.
         df = df[df['Önceki Fiyat'].notna() & (df['Satış Fiyatı'] != df['Önceki Fiyat'])]
-        if df.empty:
-            st.info("Son güncellemede fiyatı değişen ürün bulunamadı.")
+        if df.empty: st.info("Son güncellemede fiyatı değişen ürün bulunamadı.")
             
     if arama: df = df[df["Ürün Adı"].str.contains(arama, case=False)]
     if kategori != "Tümü": df = df[df["Kategori"] == kategori]
     
-    # Sıralama
     if sirala == "Fiyat Artan": df = df.sort_values("Satış Fiyatı")
     elif sirala == "Fiyat Azalan": df = df.sort_values("Satış Fiyatı", ascending=False)
     else: df = df.sort_values(["İndirim %", "Ürün Adı"], ascending=[False, True])
@@ -240,7 +227,6 @@ else:
     baslik = "🔔 Fiyatı Değişenler" if sadece_degisenler else "📦 Tüm Ürünler"
     c1.markdown(f"### {baslik} ({len(df)})")
 
-    # --- KART GÖSTERİMİ ---
     SAYFA_BASI = 24
     total_pages = math.ceil(len(df) / SAYFA_BASI)
     if st.session_state.pagination_idx >= total_pages: st.session_state.pagination_idx = 0
@@ -255,20 +241,15 @@ else:
                 st.image(row['Resim'])
                 st.markdown(f"<div class='soft-title' title='{row['Ürün Adı']}'>{row['Ürün Adı']}</div>", unsafe_allow_html=True)
                 
-                # Fiyat Alanı
                 price_html = f"<span class='price-tag'>{row['Satış Fiyatı']:.2f} ₺</span>"
                 if row['İndirim %'] > 0:
                     st.markdown(f"<div><span class='old-price'>{row['Etiket Fiyatı']:.0f}</span>{price_html}</div>", unsafe_allow_html=True)
                 else: st.markdown(f"<div>{price_html}</div>", unsafe_allow_html=True)
                 
-                # --- FİYAT DEĞİŞİM ETİKETLERİ ---
-                # "Satış Fiyatı" (Son Fiyat) baz alınarak değişim hesabı
                 if pd.notna(row['Önceki Fiyat']) and row['Önceki Fiyat'] != 0:
                     fark = row['Satış Fiyatı'] - row['Önceki Fiyat']
-                    if fark < 0: # Fiyat Düşmüş
-                        st.markdown(f"<div class='change-badge-down'>⬇ {abs(fark):.2f} TL Düştü</div>", unsafe_allow_html=True)
-                    elif fark > 0: # Fiyat Artmış
-                        st.markdown(f"<div class='change-badge-up'>⬆ {fark:.2f} TL Arttı</div>", unsafe_allow_html=True)
+                    if fark < 0: st.markdown(f"<div class='change-badge-down'>⬇ {abs(fark):.2f} TL Düştü</div>", unsafe_allow_html=True)
+                    elif fark > 0: st.markdown(f"<div class='change-badge-up'>⬆ {fark:.2f} TL Arttı</div>", unsafe_allow_html=True)
                 
                 st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
                 if st.button("İncele", key=f"btn_{i}_{row['Link']}", use_container_width=True):
