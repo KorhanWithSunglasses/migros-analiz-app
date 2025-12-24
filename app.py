@@ -5,136 +5,139 @@ import time
 import plotly.express as px
 from migros_scraper import google_sheets_baglan, calistir
 
-# --- SAYFA AYARLARI (Geniş Ekran) ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Migros Fiyat Analiz", page_icon="🛒", layout="wide")
 
-# --- CSS (CİMRİ/AKAKÇE PROFESYONEL TASARIM) ---
-st.markdown("""
+# --- STATE (DURUM) YÖNETİMİ ---
+if 'theme' not in st.session_state: st.session_state.theme = 'light'
+if 'page' not in st.session_state: st.session_state.page = 'home'
+if 'selected_product' not in st.session_state: st.session_state.selected_product = None
+if 'pagination_idx' not in st.session_state: st.session_state.pagination_idx = 0
+
+# --- TEMA DEĞİŞTİRME FONKSİYONU ---
+def toggle_theme():
+    st.session_state.theme = 'dark' if st.session_state.theme == 'light' else 'light'
+
+def go_to_detail(urun_adi):
+    st.session_state.selected_product = urun_adi
+    st.session_state.page = 'detail'
+
+def go_home():
+    st.session_state.selected_product = None
+    st.session_state.page = 'home'
+
+# --- CSS (DİNAMİK TEMA) ---
+# Temaya göre renkleri belirle
+is_dark = st.session_state.theme == 'dark'
+bg_color = "#121212" if is_dark else "#f8f9fa"
+card_bg = "#1e1e1e" if is_dark else "#ffffff"
+text_color = "#e0e0e0" if is_dark else "#333333"
+border_color = "#333333" if is_dark else "#eaeaea"
+shadow = "0 4px 20px rgba(0,0,0,0.5)" if is_dark else "0 4px 20px rgba(0,0,0,0.05)"
+
+st.markdown(f"""
 <style>
-    /* Genel Arkaplan ve Fontlar */
-    .stApp {
-        background-color: #f4f6f9; /* Hafif gri profesyonel zemin */
-    }
-    .block-container { padding-top: 1rem; padding-bottom: 3rem; }
+    /* GENEL SAYFA AYARLARI */
+    .stApp {{
+        background-color: {bg_color};
+    }}
+    .block-container {{ padding-top: 2rem; padding-bottom: 5rem; }}
 
-    /* 1. VİTRİN KARTI (GRID) */
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: white;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 10px;
-        transition: all 0.2s ease-in-out;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    
-    div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-        border-color: #3874ff; /* Cimri Mavisi Hover */
-        transform: translateY(-3px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    }
+    /* YUMUŞAK KART TASARIMI */
+    div[data-testid="stVerticalBlockBorderWrapper"] {{
+        background-color: {card_bg};
+        border: 1px solid {border_color};
+        border-radius: 20px; /* Daha yumuşak köşeler */
+        padding: 15px;
+        box-shadow: {shadow};
+        transition: transform 0.2s ease;
+    }}
+    div[data-testid="stVerticalBlockBorderWrapper"]:hover {{
+        border-color: #ff6000;
+        transform: translateY(-5px);
+    }}
 
-    /* Resim Alanı Düzenleme */
-    div[data-testid="stImage"] {
+    /* RESİM ALANI */
+    div[data-testid="stImage"] {{
         display: flex;
         justify-content: center;
         align-items: center;
-        height: 160px; /* Sabit resim alanı */
-        background-color: #fff;
-        margin-bottom: 10px;
-    }
-    
-    img {
-        object-fit: contain !important; /* Resmi kutuya sığdır */
-        max-height: 150px !important;
-    }
+        height: 180px; /* Sabit yükseklik */
+        background-color: #fff; /* Resim arkası hep beyaz kalsın ki ürün görünsün */
+        border-radius: 15px;
+        margin-bottom: 12px;
+        padding: 10px;
+    }}
+    img {{
+        object-fit: contain !important;
+        max-height: 160px !important;
+    }}
 
-    /* Kart Metinleri */
-    .card-brand { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 2px; }
-    .card-title {
+    /* METİN STİLLERİ */
+    .soft-title {{
         font-size: 14px;
         font-weight: 600;
-        color: #333;
-        line-height: 1.3;
-        height: 38px; /* 2 satır sabit */
+        color: {text_color};
+        line-height: 1.4;
+        height: 40px;
         overflow: hidden;
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         margin-bottom: 8px;
-    }
-
-    /* Fiyat Alanı */
-    .price-wrapper {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        margin-top: auto;
-    }
-    .price-old {
-        font-size: 12px;
-        color: #999;
-        text-decoration: line-through;
-    }
-    .price-current {
+    }}
+    .price-tag {{
         font-size: 20px;
         font-weight: 800;
-        color: #333;
-    }
-    .discount-badge {
-        font-size: 12px;
-        font-weight: 700;
-        color: #d00;
-        background-color: #ffe6e6;
-        padding: 2px 6px;
-        border-radius: 4px;
-        margin-top: 2px;
-    }
-
-    /* 2. DETAY SAYFASI */
-    .detail-container {
-        background-color: white;
-        padding: 30px;
-        border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    }
-    .detail-title {
-        font-size: 28px;
-        font-weight: 700;
-        color: #222;
-        margin-bottom: 15px;
-    }
-    .detail-price {
-        font-size: 32px;
-        font-weight: 800;
-        color: #222;
-    }
+        color: #ff6000; /* Migros Turuncusu */
+    }}
+    .old-price {{
+        font-size: 13px;
+        text-decoration: line-through;
+        color: #888;
+        margin-right: 8px;
+    }}
     
-    /* Mağaza Butonu */
-    .btn-store {
-        display: inline-block;
-        background-color: #ff6000; /* Migros Turuncusu */
-        color: white !important;
-        font-size: 16px;
-        font-weight: bold;
-        padding: 12px 40px;
-        border-radius: 8px;
-        text-decoration: none;
-        margin-top: 20px;
-        transition: 0.2s;
-        text-align: center;
+    /* BUTONLARIN GÖRÜNÜMÜ */
+    .stButton button {{
         width: 100%;
-    }
-    .btn-store:hover { background-color: #e55700; }
-
-    /* Geri Butonu */
-    .stButton button {
-        border-radius: 6px;
+        border-radius: 12px;
         font-weight: 600;
-    }
+        border: 1px solid {border_color};
+        transition: 0.2s;
+    }}
+    /* Geri Butonu Özelleştirme */
+    .back-btn-area button {{
+        background-color: transparent;
+        border: 2px solid #ff6000;
+        color: #ff6000;
+    }}
+    .back-btn-area button:hover {{
+        background-color: #ff6000;
+        color: white !important;
+    }}
+
+    /* DETAY SAYFASI */
+    .detail-header {{
+        font-size: 28px;
+        font-weight: 800;
+        color: {text_color};
+        margin-bottom: 20px;
+    }}
+    .stat-box {{
+        background-color: {bg_color};
+        border-radius: 15px;
+        padding: 15px;
+        text-align: center;
+        border: 1px solid {border_color};
+    }}
+    .stat-val {{ font-size: 18px; font-weight: bold; color: {text_color}; }}
+    .stat-lbl {{ font-size: 12px; color: #888; text-transform: uppercase; }}
+
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONKSİYONLAR ---
+# --- VERİ İŞLEMLERİ ---
 def temizle_ve_cevir(val):
     try:
         if pd.isna(val) or val == "": return 0.0
@@ -154,205 +157,189 @@ def veri_getir():
         headers = data.pop(0)
         df = pd.DataFrame(data, columns=headers)
         df.columns = df.columns.str.strip()
-        
         for c in ["Etiket Fiyatı", "Satış Fiyatı", "İndirim %"]:
             if c in df.columns: df[c] = df[c].apply(temizle_ve_cevir)
-        
-        if "Tarih" in df.columns:
-            df["Tarih"] = pd.to_datetime(df["Tarih"], errors='coerce')
+        if "Tarih" in df.columns: df["Tarih"] = pd.to_datetime(df["Tarih"], errors='coerce')
         return df
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-# --- STATE YÖNETİMİ (SAYFA GEÇİŞ SİSTEMİ) ---
-# Bu kısım "Geri Dön" butonunun çalışmasını sağlar
-if 'page_mode' not in st.session_state:
-    st.session_state.page_mode = 'liste' # Başlangıç modu
-if 'selected_product_name' not in st.session_state:
-    st.session_state.selected_product_name = None
-
-def detaya_git(urun_adi):
-    st.session_state.selected_product_name = urun_adi
-    st.session_state.page_mode = 'detay'
-
-def listeye_don():
-    st.session_state.selected_product_name = None
-    st.session_state.page_mode = 'liste'
-
-# --- UYGULAMA BAŞLANGICI ---
+# --- VERİ HAZIRLIĞI ---
 df_raw = veri_getir()
-
-# Veri Yoksa Uyarı
 if df_raw.empty:
-    st.error("Veri bulunamadı. Lütfen sol menüden 'Verileri Güncelle' butonuna basın.")
-    if st.sidebar.button("Verileri Güncelle"):
-        calistir()
-        st.rerun()
+    st.error("Veri bağlantısı kurulamadı.")
+    if st.button("Tekrar Dene"): st.rerun()
     st.stop()
 
-# Tekil Ürün Listesi (Vitrin İçin)
 df_vitrin = df_raw.sort_values("Tarih", ascending=False).drop_duplicates("Ürün Adı")
 
 # =======================================================
-# EKRAN 1: ÜRÜN DETAY SAYFASI (Cimri Tarzı)
+# EKRAN: DETAY SAYFASI
 # =======================================================
-if st.session_state.page_mode == 'detay':
-    urun_adi = st.session_state.selected_product_name
+if st.session_state.page == 'detail':
+    urun_adi = st.session_state.selected_product
     gecmis = df_raw[df_raw["Ürün Adı"] == urun_adi].sort_values("Tarih")
-    son_hal = gecmis.iloc[-1]
+    son = gecmis.iloc[-1]
 
-    # Üst Navigasyon
-    c_back, c_space = st.columns([1, 10])
-    c_back.button("⬅ Geri", on_click=listeye_don)
+    # ÜST NAVİGASYON (GERİ BUTONU)
+    c1, c2 = st.columns([1, 6])
+    with c1:
+        st.markdown('<div class="back-btn-area">', unsafe_allow_html=True)
+        if st.button("⬅ Geri Dön", use_container_width=True):
+            go_home()
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Detay Konteyneri
-    with st.container():
-        col_img, col_info = st.columns([4, 6], gap="large")
-        
-        # SOL: Büyük Resim
-        with col_img:
-            st.image(son_hal['Resim'], use_container_width=True)
-        
-        # SAĞ: Bilgiler
-        with col_info:
-            st.markdown(f"<div class='detail-title'>{son_hal['Ürün Adı']}</div>", unsafe_allow_html=True)
-            st.caption(f"Kategori: {son_hal['Kategori']}")
-            
-            st.markdown("---")
-            
-            # Fiyat Bloğu
-            if son_hal['İndirim %'] > 0:
-                st.markdown(f"<div style='color:#999; text-decoration:line-through; font-size:18px;'>{son_hal['Etiket Fiyatı']:.2f} ₺</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='detail-price'>{son_hal['Satış Fiyatı']:.2f} ₺ <span style='font-size:16px; color:#d00; font-weight:normal;'>(%{son_hal['İndirim %']:.0f} İndirim)</span></div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div class='detail-price'>{son_hal['Satış Fiyatı']:.2f} ₺</div>", unsafe_allow_html=True)
-            
-            # Mağaza Butonu
-            st.markdown(f"""<a href="{son_hal['Link']}" target="_blank" class="btn-store">Mağazaya Git (Migros)</a>""", unsafe_allow_html=True)
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # Minik İstatistikler
-            avg_price = gecmis['Satış Fiyatı'].mean()
-            min_price = gecmis['Satış Fiyatı'].min()
-            st.info(f"💡 **Analiz:** Bu ürün son dönemde ortalama **{avg_price:.2f} ₺** fiyatla satıldı. En düşük **{min_price:.2f} ₺** seviyesini gördü.")
+    st.markdown("---")
 
-    # GRAFİK ALANI (Alt Kısım)
-    st.divider()
-    st.subheader("📉 Fiyat Değişim Grafiği")
+    # İÇERİK (SOL: RESİM, SAĞ: BİLGİ)
+    col_img, col_info = st.columns([4, 6], gap="large")
     
+    with col_img:
+        st.image(son['Resim'], use_container_width=True)
+        st.link_button("🛒 Migros'ta Görüntüle", son['Link'], type="primary", use_container_width=True)
+
+    with col_info:
+        st.markdown(f"<div class='detail-header'>{son['Ürün Adı']}</div>", unsafe_allow_html=True)
+        
+        # Fiyat Alanı
+        st.caption(f"Kategori: {son['Kategori']}")
+        fiyat_html = f"<span class='price-tag' style='font-size:36px;'>{son['Satış Fiyatı']:.2f} ₺</span>"
+        if son['İndirim %'] > 0:
+            fiyat_html = f"<span class='old-price' style='font-size:20px;'>{son['Etiket Fiyatı']:.2f} ₺</span>" + fiyat_html
+            st.warning(f"🔥 %{son['İndirim %']:.0f} İndirim Fırsatı")
+        
+        st.markdown(f"<div style='margin: 20px 0;'>{fiyat_html}</div>", unsafe_allow_html=True)
+
+        # İstatistikler (Yan Yana)
+        s1, s2, s3 = st.columns(3)
+        avg = gecmis['Satış Fiyatı'].mean()
+        low = gecmis['Satış Fiyatı'].min()
+        high = gecmis['Satış Fiyatı'].max()
+        
+        s1.markdown(f"<div class='stat-box'><div class='stat-val'>{avg:.1f} ₺</div><div class='stat-lbl'>Ortalama</div></div>", unsafe_allow_html=True)
+        s2.markdown(f"<div class='stat-box'><div class='stat-val' style='color:#2ecc71'>{low:.1f} ₺</div><div class='stat-lbl'>En Düşük</div></div>", unsafe_allow_html=True)
+        s3.markdown(f"<div class='stat-box'><div class='stat-val' style='color:#e74c3c'>{high:.1f} ₺</div><div class='stat-lbl'>En Yüksek</div></div>", unsafe_allow_html=True)
+
+    # GRAFİK
+    st.markdown("### 📉 Fiyat Geçmişi Analizi")
     fig = px.line(gecmis, x="Tarih", y="Satış Fiyatı", markers=True)
-    fig.update_traces(line_color="#3874ff", line_width=3, marker_size=8) # Cimri Mavisi
+    fig.update_traces(line_color="#ff6000", line_width=4, marker_size=10, marker_color="white", marker_line_width=2)
+    # Tema uyumlu grafik arka planı
+    layout_bg = "#1e1e1e" if is_dark else "white"
+    grid_color = "#333" if is_dark else "#eee"
+    text_c = "#eee" if is_dark else "#333"
+    
     fig.update_layout(
-        plot_bgcolor="white",
-        hovermode="x unified",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color=text_c,
         xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor='#eee')
+        yaxis=dict(showgrid=True, gridcolor=grid_color)
     )
-    if "Etiket Fiyatı" in gecmis.columns:
-         fig.add_scatter(x=gecmis["Tarih"], y=gecmis["Etiket Fiyatı"], name="Normal Fiyat", line=dict(dash='dash', color='gray'))
-         
     st.plotly_chart(fig, use_container_width=True)
 
 
 # =======================================================
-# EKRAN 2: VİTRİN / LİSTELEME SAYFASI
+# EKRAN: ANA SAYFA (VİTRİN)
 # =======================================================
 else:
     # --- YAN MENÜ ---
     with st.sidebar:
-        st.header("🔍 Filtreler")
-        arama = st.text_input("Ürün Ara", placeholder="Örn: iPhone, Süt...")
+        st.title("🛒 Migros Avcısı")
+        
+        # TEMA BUTONU
+        icon = "🌞" if is_dark else "🌙"
+        label = "Aydınlık Mod" if is_dark else "Karanlık Mod"
+        if st.button(f"{icon} {label}a Geç"):
+            toggle_theme()
+            st.rerun()
+            
+        st.divider()
+        
+        arama = st.text_input("🔍 Ürün Ara", placeholder="Örn: Nutella")
         
         kat_list = ["Tümü"] + sorted(df_vitrin["Kategori"].astype(str).unique().tolist()) if "Kategori" in df_vitrin.columns else ["Tümü"]
-        kategori = st.selectbox("Kategori", kat_list)
+        kategori = st.selectbox("📂 Kategori", kat_list)
         
-        sirala = st.selectbox("Sıralama", ["Önerilen", "En Düşük Fiyat", "En Yüksek Fiyat", "En Büyük İndirim"])
+        sirala = st.selectbox("🔃 Sıralama", ["Akıllı (Fırsatlar)", "Fiyat Artan", "Fiyat Azalan"])
         
         st.divider()
-        if st.button("🔄 Verileri Güncelle"):
-            with st.spinner("Market taranıyor..."):
+        if st.button("🚀 Verileri Güncelle"):
+            with st.spinner("Güncelleniyor..."):
                 calistir()
                 st.cache_data.clear()
                 st.rerun()
 
-    # --- VERİ FİLTRELEME ---
+    # --- FİLTRELEME ---
     df = df_vitrin.copy()
     if arama: df = df[df["Ürün Adı"].str.contains(arama, case=False)]
     if kategori != "Tümü": df = df[df["Kategori"] == kategori]
-    
-    # Sıralama Mantığı
-    if sirala == "En Düşük Fiyat": df = df.sort_values("Satış Fiyatı")
-    elif sirala == "En Yüksek Fiyat": df = df.sort_values("Satış Fiyatı", ascending=False)
-    elif sirala == "En Büyük İndirim": df = df.sort_values("İndirim %", ascending=False)
-    else: df = df.sort_values(["İndirim %", "Ürün Adı"], ascending=[False, True]) # Önerilen
+
+    if sirala == "Fiyat Artan": df = df.sort_values("Satış Fiyatı")
+    elif sirala == "Fiyat Azalan": df = df.sort_values("Satış Fiyatı", ascending=False)
+    else: df = df.sort_values(["İndirim %", "Ürün Adı"], ascending=[False, True])
 
     # --- ÜST BİLGİ ---
-    st.markdown(f"### 📦 {len(df)} Ürün Listeleniyor")
+    c1, c2 = st.columns([2, 1])
+    c1.markdown(f"### 📦 {len(df)} Ürün Listeleniyor")
 
     # --- SAYFALAMA ---
-    SAYFA_BASI = 20 # Cimri tarzı büyük kartlar için 20 ideal
-    if "page" not in st.session_state: st.session_state.page = 0
+    SAYFA_BASI = 24 # 4 Sütun x 6 Satır
     total_pages = math.ceil(len(df) / SAYFA_BASI)
     
-    if st.session_state.page >= total_pages: st.session_state.page = max(0, total_pages - 1)
+    # State'i güvenli hale getir
+    if st.session_state.pagination_idx >= total_pages: st.session_state.pagination_idx = 0
     
-    start = st.session_state.page * SAYFA_BASI
+    start = st.session_state.pagination_idx * SAYFA_BASI
     end = start + SAYFA_BASI
     page_data = df.iloc[start:end]
 
-    # --- ÜRÜN IZGARASI (GRID) ---
     if page_data.empty:
-        st.warning("Aradığınız kriterlere uygun ürün bulunamadı.")
+        st.info("Kriterlere uygun ürün bulunamadı.")
     else:
-        # 4 Sütunlu Grid (Geniş ve okunaklı)
+        # 4 Sütunlu Grid
         cols = st.columns(4)
         for i, row in enumerate(page_data.to_dict('records')):
             with cols[i % 4]:
-                # Streamlit KUTUSU (Border=True ile çerçeve)
+                # Streamlit KUTUSU (Yumuşak Köşeli)
                 with st.container(border=True):
                     # 1. Resim
                     st.image(row['Resim'])
                     
-                    # 2. Marka/Kategori (Opsiyonel küçük gri yazı)
-                    kategori_kisa = str(row['Kategori']).split('-c-')[0].replace('-', ' ').title()
-                    st.markdown(f"<div class='card-brand'>{kategori_kisa}</div>", unsafe_allow_html=True)
-
-                    # 3. Başlık
-                    st.markdown(f"<div class='card-title' title='{row['Ürün Adı']}'>{row['Ürün Adı']}</div>", unsafe_allow_html=True)
+                    # 2. Başlık (2 satır sınırlı)
+                    st.markdown(f"<div class='soft-title' title='{row['Ürün Adı']}'>{row['Ürün Adı']}</div>", unsafe_allow_html=True)
                     
-                    # 4. Fiyat Bloğu
+                    # 3. Fiyat
+                    price_html = f"<span class='price-tag'>{row['Satış Fiyatı']:.2f} ₺</span>"
                     if row['İndirim %'] > 0:
                         st.markdown(f"""
-                        <div class="price-wrapper">
-                            <span class="price-old">{row['Etiket Fiyatı']:.0f} TL</span>
-                            <span class="price-current">{row['Satış Fiyatı']:.2f} TL</span>
-                            <span class="discount-badge">%{row['İndirim %']:.0f} İndirim</span>
+                        <div>
+                            <span class='old-price'>{row['Etiket Fiyatı']:.0f}</span>
+                            {price_html}
+                            <span style='color:#d00; font-size:12px; font-weight:bold; margin-left:5px;'>%{row['İndirim %']:.0f}</span>
                         </div>
                         """, unsafe_allow_html=True)
                     else:
-                        st.markdown(f"""
-                        <div class="price-wrapper">
-                             <div style="height:17px"></div> <span class="price-current">{row['Satış Fiyatı']:.2f} TL</span>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown(f"<div>{price_html}</div>", unsafe_allow_html=True)
                     
-                    st.markdown("<div style='margin-bottom:10px;'></div>", unsafe_allow_html=True)
+                    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
                     
-                    # 5. İNCELE BUTONU (Tam Genişlik)
-                    # Unique key önemli!
-                    st.button("İncele", key=f"btn_{i}_{row['Link']}", on_click=detaya_git, args=(row['Ürün Adı'],), use_container_width=True)
+                    # 4. İNCELE BUTONU
+                    if st.button("İncele", key=f"btn_{i}_{row['Link']}", use_container_width=True):
+                        go_to_detail(row['Ürün Adı'])
+                        st.rerun()
 
     st.divider()
     
-    # --- SAYFALAMA BUTONLARI ---
-    c_prev, c_txt, c_next = st.columns([1, 2, 1])
-    if c_prev.button("◀ Önceki Sayfa", disabled=(st.session_state.page == 0)):
-        st.session_state.page -= 1
+    # --- SAYFALAMA BUTONLARI (ORTALI) ---
+    col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+    
+    if col_p1.button("◀ Önceki Sayfa", disabled=(st.session_state.pagination_idx == 0), use_container_width=True):
+        st.session_state.pagination_idx -= 1
         st.rerun()
+        
+    col_p2.markdown(f"<div style='text-align:center; padding-top:10px; font-weight:bold; color:{text_color}'>Sayfa {st.session_state.pagination_idx + 1} / {max(1, total_pages)}</div>", unsafe_allow_html=True)
     
-    c_txt.markdown(f"<div style='text-align:center; padding-top:10px;'><b>Sayfa {st.session_state.page + 1} / {max(1, total_pages)}</b></div>", unsafe_allow_html=True)
-    
-    if c_next.button("Sonraki Sayfa ▶", disabled=(st.session_state.page >= total_pages - 1)):
-        st.session_state.page += 1
+    if col_p3.button("Sonraki Sayfa ▶", disabled=(st.session_state.pagination_idx >= total_pages - 1), use_container_width=True):
+        st.session_state.pagination_idx += 1
         st.rerun()
