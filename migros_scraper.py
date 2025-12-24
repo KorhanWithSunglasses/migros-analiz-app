@@ -29,141 +29,152 @@ def google_sheets_baglan():
         else:
             return None
     client = gspread.authorize(creds)
-    sheet = client.open("Migros_Takip_DB").sheet1
-    return sheet
+    # Dosyayı aç
+    return client.open("Migros_Takip_DB")
 
 def tr_format(sayi):
     if sayi is None: return "0"
     return f"{float(sayi):.2f}".replace('.', ',')
 
-# --- YENİ: KAMPANYA TEMİZLEYİCİ ---
 def kampanya_temizle(badges):
-    """Badges listesindeki anlamsız fiyatları ve kodları temizler."""
-    temiz_kampanyalar = []
+    temiz = []
     for b in badges:
         val = b.get("value", "")
         if not val: continue
-        
-        # İçinde "TL" geçen veya sadece rakam/nokta/virgülden oluşanları at
-        # Örn: "249,95 TL" veya "59.90" gibi değerleri filtrele
-        if "TL" in val or re.match(r'^[\d.,]+$', val.strip()):
-            continue
-            
-        # Kalan anlamlı metinleri (Örn: "2 Al 1 Öde") listeye ekle
-        temiz_kampanyalar.append(val)
-        
-    return ", ".join(temiz_kampanyalar) if temiz_kampanyalar else ""
+        if "TL" in val or re.match(r'^[\d.,]+$', val.strip()): continue
+        temiz.append(val)
+    return ", ".join(temiz) if temiz else ""
 
 def veri_cek(slug):
     tum_urunler = []
     page = 1
-    # Güvenlik Limiti: Max 80 sayfa (Migros genelde 50-60 sayfa oluyor)
-    while page <= 80:
+    # Güvenlik Limiti
+    while page <= 100:
         url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page={page}"
         headers = {"User-Agent": "Mozilla/5.0", "X-PWA": "true"}
-        
         try:
-            time.sleep(0.4) # Biraz daha yavaşlayalım, banlanmayalım
-            response = requests.get(url, headers=headers, timeout=15)
+            time.sleep(0.3)
+            response = requests.get(url, headers=headers, timeout=10)
             if response.status_code != 200: break
             
             data = response.json()
             raw_products = []
-            try:
-                raw_products = data["data"]["searchInfo"]["storeProductInfos"]
-            except:
-                try:
-                    raw_products = data["data"]["products"]
-                except:
-                    pass
+            try: raw_products = data["data"]["searchInfo"]["storeProductInfos"]
+            except: 
+                try: raw_products = data["data"]["products"]
+                except: pass
             
             if not raw_products: break
-
             print(f"Kategori: {slug} | Sayfa: {page} | Ürün: {len(raw_products)}")
 
             for item in raw_products:
                 try:
                     name = item.get("name", "")
-                    regular_price = item.get("regularPrice", 0) / 100
-                    shown_price = item.get("shownPrice", 0) / 100
-                    if regular_price == 0: regular_price = shown_price
+                    reg_p = item.get("regularPrice", 0) / 100
+                    shown_p = item.get("shownPrice", 0) / 100
+                    if reg_p == 0: reg_p = shown_p
 
-                    exhausted = item.get("exhausted", False)
-                    stok = "Yok" if exhausted else "Var"
-                    
-                    # YENİ FONKSİYONU KULLAN
                     badges = item.get("badges", [])
                     indirim_tipi = kampanya_temizle(badges)
 
                     indirim_orani = 0
                     durum = "Normal"
-                    if regular_price > shown_price:
-                        indirim_orani = ((regular_price - shown_price) / regular_price) * 100
+                    if reg_p > shown_p:
+                        indirim_orani = ((reg_p - shown_p) / reg_p) * 100
                         if indirim_orani > 50: durum = "SÜPER FIRSAT"
                         elif indirim_orani >= 20: durum = "FIRSAT"
                         
-                    if "Öde" in indirim_tipi or "Hediye" in indirim_tipi or "İkincisi" in indirim_tipi:
-                        durum = "ÇOKLU ALIM FIRSATI"
+                    if "Öde" in indirim_tipi or "Hediye" in indirim_tipi: durum = "ÇOKLU ALIM"
 
                     images = item.get("images", [])
-                    image_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
-                    urun_linki = f"https://www.migros.com.tr/{item.get('prettyName', '')}-{item.get('id')}"
+                    img_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
+                    link = f"https://www.migros.com.tr/{item.get('prettyName', '')}-{item.get('id')}"
 
                     birim_fiyat = "0"
                     birim = "Adet"
                     match = re.search(r"(\d+)\s*(KG|L|Litre|Lt|Gr|Gram)", name, re.IGNORECASE)
-                    if match:
-                        birim = match.group(2).upper()
+                    if match: birim = match.group(2).upper()
 
                     tum_urunler.append([
                         datetime.now().strftime("%Y-%m-%d %H:%M"),
                         name,
-                        tr_format(regular_price),
-                        tr_format(shown_price),
+                        tr_format(reg_p),
+                        tr_format(shown_p),
                         indirim_tipi,
                         tr_format(indirim_orani),
                         durum,
-                        stok,
+                        "Var",
                         tr_format(birim_fiyat),
                         birim,
                         slug,
-                        image_url,
-                        urun_linki
+                        img_url,
+                        link
                     ])
-                except:
-                    continue
+                except: continue
             page += 1
-        except:
-            break
+        except: break
     return tum_urunler
 
 def calistir():
     print("Tarama başlıyor...")
-    eklenen_urunler = set()
-    sheet = google_sheets_baglan()
+    # Verileri Topla
+    nihai_liste = []
+    eklenen_idler = set()
     
-    if not sheet: return
-
     for kat in KATEGORILER:
-        print(f"{kat} taranıyor...")
-        kategori_verisi = veri_cek(kat)
-        yazilacak_liste = []
-        
-        for satir in kategori_verisi:
-            urun_adi = satir[1]
-            if urun_adi not in eklenen_urunler:
-                yazilacak_liste.append(satir)
-                eklenen_urunler.add(urun_adi)
-        
-        if yazilacak_liste:
-            try:
-                sheet.append_rows(yazilacak_liste, value_input_option='RAW')
-                print(f"✅ {kat}: {len(yazilacak_liste)} ürün yazıldı.")
-            except:
-                time.sleep(5) # Hata olursa 5sn bekle
-                try: sheet.append_rows(yazilacak_liste, value_input_option='RAW')
-                except: pass
-        
-        time.sleep(3) # Kategori arası bekleme
+        veriler = veri_cek(kat)
+        for v in veriler:
+            # Ürün ismine göre basit tekilleştirme (aynı tarama içinde)
+            if v[1] not in eklenen_idler:
+                nihai_liste.append(v)
+                eklenen_idler.add(v[1])
+    
+    if not nihai_liste:
+        print("Veri bulunamadı!")
+        return
 
-    print("🎉 Tüm işlem tamamlandı.")
+    # Spreadsheet'e Bağlan
+    spreadsheet = google_sheets_baglan()
+    if not spreadsheet: return
+
+    # --- 1. ANA VERİTABANINA EKLE (GEÇMİŞ İÇİN) ---
+    try:
+        # Ana sayfayı bulmaya çalış, yoksa oluştur
+        try:
+            ana_sheet = spreadsheet.worksheet("Ana_Veritabani")
+        except:
+            ana_sheet = spreadsheet.add_worksheet(title="Ana_Veritabani", rows="1000", cols="20")
+            # Başlıkları ekle
+            basliklar = ["Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi", "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"]
+            ana_sheet.append_row(basliklar)
+            
+        # Verileri ana veritabanının altına ekle
+        ana_sheet.append_rows(nihai_liste, value_input_option='RAW')
+        print("✅ Ana veritabanı güncellendi.")
+    except Exception as e:
+        print(f"❌ Ana DB Hatası: {e}")
+
+    # --- 2. YENİ RAPOR SAYFASI OLUŞTUR (KOLAY TAKİP İÇİN) ---
+    try:
+        # Sayfa İsmi: Örn "24.12.2025 - 19:30"
+        sayfa_ismi = datetime.now().strftime("%d.%m.%Y - %H:%M")
+        
+        # Eğer aynı dakika içinde basıldıysa hata vermesin diye saniye ekle
+        try:
+            new_sheet = spreadsheet.add_worksheet(title=sayfa_ismi, rows=len(nihai_liste)+20, cols="15")
+        except:
+            sayfa_ismi = datetime.now().strftime("%d.%m.%Y - %H:%M:%S")
+            new_sheet = spreadsheet.add_worksheet(title=sayfa_ismi, rows=len(nihai_liste)+20, cols="15")
+        
+        # Başlıkları Yaz
+        basliklar = ["Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi", "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"]
+        new_sheet.append_row(basliklar)
+        
+        # Verileri Yaz
+        new_sheet.append_rows(nihai_liste, value_input_option='RAW')
+        print(f"✅ Yeni sayfa oluşturuldu: {sayfa_ismi}")
+        
+    except Exception as e:
+        print(f"❌ Yeni Sayfa Oluşturma Hatası: {e}")
+
+    print(f"🎉 Toplam {len(nihai_liste)} ürün işlendi.")
