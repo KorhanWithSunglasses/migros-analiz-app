@@ -7,14 +7,25 @@ import re
 import os
 import time
 
-# --- KATEGORİ LİSTESİ ---
+# --- TAKİP EDİLECEK TÜM KATEGORİLER ---
+# Robot bu listeyi sırasıyla gezecek.
 KATEGORILER = [
-    "meyve-sebze-c-2", "et-tavuk-balik-c-3", "sut-kahvaltilik-c-4",
-    "temel-gida-c-5", "meze-hazir-yemek-donuk-c-7d", "firin-pastane-c-6",
-    "dondurma-c-41b", "atistirmalik-c-b", "icecek-c-c",
-    "deterjan-temizlik-c-d", "kisisel-bakim-kozmetik-c-e", "bebek-c-8",
-    "ev-yasam-c-9", "kitap-kirtasiye-oyuncak-c-a", "evcil-dostlar-c-10d",
-    "elektronik-c-11"
+    "elektronik-c-11",              # Önce Elektronik (Telefon vb.)
+    "meyve-sebze-c-2",
+    "et-tavuk-balik-c-3",
+    "sut-kahvaltilik-c-4",
+    "temel-gida-c-5",
+    "meze-hazir-yemek-donuk-c-7d",
+    "firin-pastane-c-6",
+    "dondurma-c-41b",
+    "atistirmalik-c-b",
+    "icecek-c-c",
+    "deterjan-temizlik-c-d",
+    "kisisel-bakim-kozmetik-c-e",
+    "bebek-c-8",
+    "ev-yasam-c-9",
+    "kitap-kirtasiye-oyuncak-c-a",
+    "evcil-dostlar-c-10d"
 ]
 
 def google_sheets_baglan():
@@ -47,24 +58,32 @@ def kampanya_temizle(badges):
 def veri_cek(slug):
     tum_urunler = []
     page = 1
-    # Limit: 50 sayfa
-    while page <= 50:
+    max_sayfa = 50 # Her kategori için güvenlik limiti
+    
+    while page <= max_sayfa:
         url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page={page}"
-        headers = {"User-Agent": "Mozilla/5.0", "X-PWA": "true"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "X-PWA": "true"
+        }
+        
         try:
-            time.sleep(0.5) 
-            response = requests.get(url, headers=headers, timeout=15)
+            time.sleep(0.5) # Migros'u yormamak için bekleme süresi
+            response = requests.get(url, headers=headers, timeout=20)
             if response.status_code != 200: break
             
             data = response.json()
             raw_products = []
+            
+            # Ürün verisi farklı yollarda olabilir
             try: raw_products = data["data"]["searchInfo"]["storeProductInfos"]
             except: 
                 try: raw_products = data["data"]["products"]
                 except: pass
             
             if not raw_products: break
-            print(f"Kategori: {slug} | Sayfa: {page} | Ürün: {len(raw_products)}")
+            
+            print(f"✅ {slug} | Sayfa: {page} | Ürün: {len(raw_products)}")
 
             for item in raw_products:
                 try:
@@ -73,9 +92,8 @@ def veri_cek(slug):
                     shown_p = item.get("shownPrice", 0) / 100
                     if reg_p == 0: reg_p = shown_p
 
-                    badges = item.get("badges", [])
-                    indirim_tipi = kampanya_temizle(badges)
-
+                    indirim_tipi = kampanya_temizle(item.get("badges", []))
+                    
                     indirim_orani = 0
                     durum = "Normal"
                     if reg_p > shown_p:
@@ -88,7 +106,7 @@ def veri_cek(slug):
                     images = item.get("images", [])
                     img_url = images[0]["urls"]["PRODUCT_DETAIL"] if images else ""
                     
-                    # Link Düzeltme
+                    # LİNK DÜZELTME (Sadece prettyName kullanıyoruz, ID yok)
                     urun_linki = f"https://www.migros.com.tr/{item.get('prettyName', '')}"
 
                     birim_fiyat = "0"
@@ -113,18 +131,20 @@ def veri_cek(slug):
                     ])
                 except: continue
             page += 1
-        except: break
+        except Exception as e:
+            print(f"⚠️ Sayfa hatası ({slug}): {e}")
+            break
+            
     return tum_urunler
 
 def calistir():
-    print("Tarama başlıyor...")
-    
+    print("🚀 Tarama başlatılıyor...")
     spreadsheet = google_sheets_baglan()
     if not spreadsheet:
-        print("Sheets bağlanamadı!")
+        print("❌ Google Sheets bağlantısı başarısız!")
         return
 
-    # 1. HEDEF: ANA VERİTABANI (GEÇMİŞ TUTULAN YER)
+    # 1. Ana Veritabanı Sayfası
     try:
         ana_sheet = spreadsheet.worksheet("Ana_Veritabani")
     except:
@@ -132,40 +152,37 @@ def calistir():
         basliklar = ["Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi", "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"]
         ana_sheet.append_row(basliklar)
 
-    # 2. HEDEF: GÜNLÜK YEDEK SAYFASI (YENİ SEKME)
+    # 2. Günlük Yedek Sayfası
     gunluk_sheet = None
     try:
         sayfa_ismi = datetime.now().strftime("%d.%m.%Y - %H:%M")
         gunluk_sheet = spreadsheet.add_worksheet(title=sayfa_ismi, rows="1000", cols="20")
         basliklar = ["Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi", "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"]
         gunluk_sheet.append_row(basliklar)
-        print(f"✅ Yeni yedek sayfası oluşturuldu: {sayfa_ismi}")
-    except Exception as e:
-        print(f"⚠️ Yedek sayfası oluşturulamadı (İsim çakışması olabilir): {e}")
+        print(f"📅 Yeni sayfa açıldı: {sayfa_ismi}")
+    except:
+        print("⚠️ Günlük sayfa zaten var veya oluşturulamadı.")
 
-    # TARAMA VE KAYDETME (Parça Parça)
-    toplam_eklenen = 0
+    toplam_kayit = 0
     
+    # PARÇA PARÇA KAYDETME (Veri Kaybını Önler)
     for kat in KATEGORILER:
-        print(f"--- {kat} taranıyor ---")
-        try:
-            kategori_verisi = veri_cek(kat)
-            
-            if kategori_verisi:
-                # 1. Ana veritabanına EKLE (Silmeden altına yazar)
-                ana_sheet.append_rows(kategori_verisi, value_input_option='RAW')
-                
-                # 2. Günlük sayfaya EKLE (Varsa)
+        print(f"⏳ {kat} taranıyor...")
+        veriler = veri_cek(kat)
+        
+        if veriler:
+            try:
+                # Ana veritabanına ekle
+                ana_sheet.append_rows(veriler, value_input_option='RAW')
+                # Günlük sayfaya ekle (varsa)
                 if gunluk_sheet:
-                    gunluk_sheet.append_rows(kategori_verisi, value_input_option='RAW')
-                    
-                print(f"✅ {kat}: {len(kategori_verisi)} ürün iki sayfaya da işlendi.")
-                toplam_eklenen += len(kategori_verisi)
-            else:
-                print(f"⚠️ {kat} kategorisinden veri gelmedi.")
+                    gunluk_sheet.append_rows(veriler, value_input_option='RAW')
                 
-        except Exception as e:
-            print(f"❌ Hata ({kat}): {e}")
-            continue
-            
-    print(f"🎉 İşlem Tamam! Toplam {toplam_eklenen} ürün güvenle kaydedildi.")
+                print(f"💾 {kat} kaydedildi. ({len(veriler)} ürün)")
+                toplam_kayit += len(veriler)
+            except Exception as e:
+                print(f"❌ Yazma hatası ({kat}): {e}")
+        else:
+            print(f"⚠️ {kat} kategorisinden ürün gelmedi.")
+
+    print(f"🏁 İŞLEM TAMAMLANDI! Toplam {toplam_kayit} ürün güncellendi.")
