@@ -7,9 +7,9 @@ import plotly.express as px
 from migros_scraper import google_sheets_baglan, calistir
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Migros Fiyat Analiz", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Migros Fiyat Avcısı", page_icon="🛒", layout="wide")
 
-# --- STATE ---
+# --- DURUM YÖNETİMİ ---
 if 'theme' not in st.session_state: st.session_state.theme = 'light'
 if 'page' not in st.session_state: st.session_state.page = 'home'
 if 'selected_product' not in st.session_state: st.session_state.selected_product = None
@@ -25,7 +25,7 @@ def go_home():
     st.session_state.page = 'home'
     st.session_state.pagination_idx = 0
 
-# --- CSS ---
+# --- CSS STİLLERİ ---
 is_dark = st.session_state.theme == 'dark'
 bg_color = "#121212" if is_dark else "#f8f9fa"
 card_bg = "#1e1e1e" if is_dark else "#ffffff"
@@ -70,13 +70,13 @@ st.markdown(f"""
     
     .change-badge-down {{
         background-color: #dcfce7; color: #166534; border: 1px solid #bbf7d0;
-        font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 6px;
-        display: inline-block; margin-top: 5px; width: 100%; text-align: center;
+        font-size: 12px; font-weight: bold; padding: 4px 8px; border-radius: 6px;
+        display: block; margin-top: 5px; text-align: center;
     }}
     .change-badge-up {{
         background-color: #fee2e2; color: #991b1b; border: 1px solid #fecaca;
-        font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 6px;
-        display: inline-block; margin-top: 5px; width: 100%; text-align: center;
+        font-size: 12px; font-weight: bold; padding: 4px 8px; border-radius: 6px;
+        display: block; margin-top: 5px; text-align: center;
     }}
 
     .stButton button {{ width: 100%; border-radius: 12px; font-weight: 600; border: 1px solid {border_color}; transition: 0.2s; }}
@@ -103,8 +103,9 @@ def linki_duzelt(link):
     if not isinstance(link, str): return "#"
     link = link.strip()
     if "-p-" in link:
+        # Linkte -p- varsa sonundaki ID'yi ve tireyi atar
         match = re.search(r"(.*-p-[a-z0-9]+)(-\d+)$", link)
-        if match: return match.group(1) 
+        if match: return match.group(1)
     return link
 
 @st.cache_data(ttl=600)
@@ -130,20 +131,19 @@ def veri_getir():
 # --- VERİ HAZIRLIĞI ---
 df_raw = veri_getir()
 
-# Veri Kontrolü
 if df_raw.empty:
     with st.sidebar:
          if st.button("🚀 Verileri Başlat"):
             calistir()
             st.rerun()
-    st.error("Veritabanı boş veya okunamadı. Lütfen sol menüden güncelleme yapın.")
+    st.error("Veritabanı boş. Lütfen sol menüden güncelleme yapın.")
     st.stop()
 
-# 1. Analiz
+# 1. Analiz (Fiyat Değişim Hesabı)
 df_sorted = df_raw.sort_values(["Ürün Adı", "Tarih"])
 df_sorted['Önceki Fiyat'] = df_sorted.groupby("Ürün Adı")["Satış Fiyatı"].shift(1)
 
-# 2. Vitrin
+# 2. Vitrin (Son Güncel Hal)
 df_vitrin = df_sorted.drop_duplicates("Ürün Adı", keep='last')
 df_vitrin['Fiyat Farkı'] = df_vitrin['Satış Fiyatı'] - df_vitrin['Önceki Fiyat']
 
@@ -205,18 +205,20 @@ else:
         if st.button("🧹 Önbelleği Temizle"): st.cache_data.clear(); st.rerun()
 
         st.divider()
-        # VERİ DURUMU (YENİ)
-        st.info(f"📊 Veri Durumu:\n- Toplam Ürün: {len(df_vitrin)}\n- Kategori Sayısı: {len(df_vitrin['Kategori'].unique())}")
-        
-        st.divider()
         arama = st.text_input("🔍 Ürün Ara")
+        
+        # Kategori Listesi (Tüm Veriden Çekiliyor)
         tum_kategoriler = sorted(df_raw["Kategori"].astype(str).unique().tolist()) if "Kategori" in df_raw.columns else []
         kat_list = ["Tümü"] + tum_kategoriler
         kategori = st.selectbox("📂 Kategori", kat_list)
+        
         sirala = st.selectbox("🔃 Sıralama", ["Akıllı (Fırsatlar)", "Fiyat Artan", "Fiyat Azalan"])
         
         st.markdown("---")
-        sadece_degisenler = st.toggle("🔔 Fiyatı Değişenler", value=False)
+        # YENİ FİLTRELEME SİSTEMİ
+        st.markdown("### 🔔 Fiyat Alarmları")
+        degisim_tipi = st.radio("Değişim Tipi:", ["Tüm Ürünler", "Fiyatı Düşenler ⬇️", "Fiyatı Artanlar ⬆️", "Tüm Değişimler 🔔"])
+        
         st.divider()
         if st.button("🚀 Verileri Güncelle"):
             with st.spinner("Güncelleniyor..."):
@@ -224,57 +226,76 @@ else:
                 st.cache_data.clear()
                 st.rerun()
 
+    # --- FİLTRELEME ---
     df = df_vitrin.copy()
-    if sadece_degisenler:
-        df = df[df['Önceki Fiyat'].notna() & (df['Satış Fiyatı'] != df['Önceki Fiyat'])]
-        if df.empty: st.info("📉 Değişim yok.")
     
+    # FİYAT DEĞİŞİM FİLTRESİ
+    if degisim_tipi == "Fiyatı Düşenler ⬇️":
+        # Önceki fiyatı var ve fark < 0 (Düşüş)
+        df = df[df['Önceki Fiyat'].notna() & (df['Fiyat Farkı'] < -0.01)]
+    elif degisim_tipi == "Fiyatı Artanlar ⬆️":
+        # Önceki fiyatı var ve fark > 0 (Artış)
+        df = df[df['Önceki Fiyat'].notna() & (df['Fiyat Farkı'] > 0.01)]
+    elif degisim_tipi == "Tüm Değişimler 🔔":
+        # Sadece değişenler
+        df = df[df['Önceki Fiyat'].notna() & (df['Satış Fiyatı'] != df['Önceki Fiyat'])]
+    
+    # Arama ve Kategori
     if arama: df = df[df["Ürün Adı"].str.contains(arama, case=False)]
     if kategori != "Tümü": df = df[df["Kategori"] == kategori]
     
+    # Sıralama
     if sirala == "Fiyat Artan": df = df.sort_values("Satış Fiyatı")
     elif sirala == "Fiyat Azalan": df = df.sort_values("Satış Fiyatı", ascending=False)
     else: df = df.sort_values(["İndirim %", "Ürün Adı"], ascending=[False, True])
 
+    # --- LİSTELEME ---
     c1, c2 = st.columns([2, 1])
-    baslik = "🔔 Fiyatı Değişenler" if sadece_degisenler else "📦 Tüm Ürünler"
-    c1.markdown(f"### {baslik} ({len(df)})")
-
-    SAYFA_BASI = 24
-    total_pages = math.ceil(len(df) / SAYFA_BASI)
-    if st.session_state.pagination_idx >= total_pages: st.session_state.pagination_idx = 0
-    start = st.session_state.pagination_idx * SAYFA_BASI
-    end = start + SAYFA_BASI
-    page_data = df.iloc[start:end]
-
-    cols = st.columns(4)
-    for i, row in enumerate(page_data.to_dict('records')):
-        with cols[i % 4]:
-            with st.container(border=True):
-                st.image(row['Resim'])
-                st.markdown(f"<div class='soft-title' title='{row['Ürün Adı']}'>{row['Ürün Adı']}</div>", unsafe_allow_html=True)
-                
-                price_html = f"<span class='price-tag'>{row['Satış Fiyatı']:.2f} ₺</span>"
-                if row['İndirim %'] > 0:
-                    st.markdown(f"<div><span class='old-price'>{row['Etiket Fiyatı']:.0f}</span>{price_html}</div>", unsafe_allow_html=True)
-                else: st.markdown(f"<div>{price_html}</div>", unsafe_allow_html=True)
-                
-                if pd.notna(row['Önceki Fiyat']) and row['Önceki Fiyat'] != 0:
-                    fark = row['Satış Fiyatı'] - row['Önceki Fiyat']
-                    if fark < -0.01: st.markdown(f"<div class='change-badge-down'>⬇ {abs(fark):.2f} TL Düştü</div>", unsafe_allow_html=True)
-                    elif fark > 0.01: st.markdown(f"<div class='change-badge-up'>⬆ {fark:.2f} TL Arttı</div>", unsafe_allow_html=True)
-                
-                st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
-                if st.button("İncele", key=f"btn_{i}_{row['Link']}", use_container_width=True):
-                    go_to_detail(row['Ürün Adı'])
-                    st.rerun()
+    c1.markdown(f"### 📦 {len(df)} Ürün Listeleniyor")
     
-    st.divider()
-    col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
-    if col_p1.button("◀ Önceki", disabled=(st.session_state.pagination_idx == 0), use_container_width=True):
-        st.session_state.pagination_idx -= 1
-        st.rerun()
-    col_p2.markdown(f"<div style='text-align:center; padding-top:10px; font-weight:bold; color:{text_color}'>Sayfa {st.session_state.pagination_idx + 1} / {max(1, total_pages)}</div>", unsafe_allow_html=True)
-    if col_p3.button("Sonraki ▶", disabled=(st.session_state.pagination_idx >= total_pages - 1), use_container_width=True):
-        st.session_state.pagination_idx += 1
-        st.rerun()
+    if df.empty:
+        st.info("Kriterlere uygun ürün bulunamadı.")
+    else:
+        # Sayfalama
+        SAYFA_BASI = 24
+        total_pages = math.ceil(len(df) / SAYFA_BASI)
+        if st.session_state.pagination_idx >= total_pages: st.session_state.pagination_idx = 0
+        start = st.session_state.pagination_idx * SAYFA_BASI
+        end = start + SAYFA_BASI
+        page_data = df.iloc[start:end]
+
+        cols = st.columns(4)
+        for i, row in enumerate(page_data.to_dict('records')):
+            with cols[i % 4]:
+                with st.container(border=True):
+                    st.image(row['Resim'])
+                    st.markdown(f"<div class='soft-title' title='{row['Ürün Adı']}'>{row['Ürün Adı']}</div>", unsafe_allow_html=True)
+                    
+                    # Fiyat Alanı
+                    price_html = f"<span class='price-tag'>{row['Satış Fiyatı']:.2f} ₺</span>"
+                    if row['İndirim %'] > 0:
+                        st.markdown(f"<div><span class='old-price'>{row['Etiket Fiyatı']:.0f}</span>{price_html}</div>", unsafe_allow_html=True)
+                    else: st.markdown(f"<div>{price_html}</div>", unsafe_allow_html=True)
+                    
+                    # Değişim Etiketi
+                    if pd.notna(row['Önceki Fiyat']) and row['Önceki Fiyat'] != 0:
+                        fark = row['Satış Fiyatı'] - row['Önceki Fiyat']
+                        if fark < -0.01: 
+                            st.markdown(f"<div class='change-badge-down'>⬇ {abs(fark):.2f} TL Düştü</div>", unsafe_allow_html=True)
+                        elif fark > 0.01: 
+                            st.markdown(f"<div class='change-badge-up'>⬆ {fark:.2f} TL Arttı</div>", unsafe_allow_html=True)
+                    
+                    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+                    if st.button("İncele", key=f"btn_{i}_{row['Link']}", use_container_width=True):
+                        go_to_detail(row['Ürün Adı'])
+                        st.rerun()
+        
+        st.divider()
+        col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+        if col_p1.button("◀ Önceki", disabled=(st.session_state.pagination_idx == 0), use_container_width=True):
+            st.session_state.pagination_idx -= 1
+            st.rerun()
+        col_p2.markdown(f"<div style='text-align:center; padding-top:10px; font-weight:bold; color:{text_color}'>Sayfa {st.session_state.pagination_idx + 1} / {max(1, total_pages)}</div>", unsafe_allow_html=True)
+        if col_p3.button("Sonraki ▶", disabled=(st.session_state.pagination_idx >= total_pages - 1), use_container_width=True):
+            st.session_state.pagination_idx += 1
+            st.rerun()
