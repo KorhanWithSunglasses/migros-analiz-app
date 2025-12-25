@@ -7,14 +7,14 @@ import re
 import os
 import time
 
-# --- KATEGORİLER (Sıralama Önemli) ---
+# --- KATEGORİ LİSTESİ ---
 KATEGORILER = [
     "meyve-sebze-c-2", "et-tavuk-balik-c-3", "sut-kahvaltilik-c-4",
     "temel-gida-c-5", "meze-hazir-yemek-donuk-c-7d", "firin-pastane-c-6",
     "dondurma-c-41b", "atistirmalik-c-b", "icecek-c-c",
     "deterjan-temizlik-c-d", "kisisel-bakim-kozmetik-c-e", "bebek-c-8",
     "ev-yasam-c-9", "kitap-kirtasiye-oyuncak-c-a", "evcil-dostlar-c-10d",
-    "elektronik-c-11" # Telefonlar burada
+    "elektronik-c-11"
 ]
 
 def google_sheets_baglan():
@@ -47,12 +47,12 @@ def kampanya_temizle(badges):
 def veri_cek(slug):
     tum_urunler = []
     page = 1
-    # Elektronik gibi kategorilerde 100 sayfa olmaz, ama yine de limit koyalım
+    # Limit: 50 sayfa
     while page <= 50:
         url = f"https://www.migros.com.tr/rest/search/screens/{slug}?page={page}"
         headers = {"User-Agent": "Mozilla/5.0", "X-PWA": "true"}
         try:
-            time.sleep(0.5) # Biraz yavaş gidelim, banlanmayalım
+            time.sleep(0.5) 
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code != 200: break
             
@@ -124,7 +124,7 @@ def calistir():
         print("Sheets bağlanamadı!")
         return
 
-    # Ana veritabanı sayfasını hazırla
+    # 1. HEDEF: ANA VERİTABANI (GEÇMİŞ TUTULAN YER)
     try:
         ana_sheet = spreadsheet.worksheet("Ana_Veritabani")
     except:
@@ -132,7 +132,18 @@ def calistir():
         basliklar = ["Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi", "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"]
         ana_sheet.append_row(basliklar)
 
-    # KATEGORİ BAZLI KAYDETME (Parça Parça)
+    # 2. HEDEF: GÜNLÜK YEDEK SAYFASI (YENİ SEKME)
+    gunluk_sheet = None
+    try:
+        sayfa_ismi = datetime.now().strftime("%d.%m.%Y - %H:%M")
+        gunluk_sheet = spreadsheet.add_worksheet(title=sayfa_ismi, rows="1000", cols="20")
+        basliklar = ["Tarih", "Ürün Adı", "Etiket Fiyatı", "Satış Fiyatı", "İndirim Tipi", "İndirim %", "Durum", "Stok", "Birim Fiyat", "Birim", "Kategori", "Resim", "Link"]
+        gunluk_sheet.append_row(basliklar)
+        print(f"✅ Yeni yedek sayfası oluşturuldu: {sayfa_ismi}")
+    except Exception as e:
+        print(f"⚠️ Yedek sayfası oluşturulamadı (İsim çakışması olabilir): {e}")
+
+    # TARAMA VE KAYDETME (Parça Parça)
     toplam_eklenen = 0
     
     for kat in KATEGORILER:
@@ -141,15 +152,20 @@ def calistir():
             kategori_verisi = veri_cek(kat)
             
             if kategori_verisi:
-                # Veriyi hemen yaz! Bekleme yapma!
+                # 1. Ana veritabanına EKLE (Silmeden altına yazar)
                 ana_sheet.append_rows(kategori_verisi, value_input_option='RAW')
-                print(f"✅ {kat}: {len(kategori_verisi)} ürün veritabanına işlendi.")
+                
+                # 2. Günlük sayfaya EKLE (Varsa)
+                if gunluk_sheet:
+                    gunluk_sheet.append_rows(kategori_verisi, value_input_option='RAW')
+                    
+                print(f"✅ {kat}: {len(kategori_verisi)} ürün iki sayfaya da işlendi.")
                 toplam_eklenen += len(kategori_verisi)
             else:
                 print(f"⚠️ {kat} kategorisinden veri gelmedi.")
                 
         except Exception as e:
             print(f"❌ Hata ({kat}): {e}")
-            continue # Hata olsa bile diğer kategoriye geç
+            continue
             
-    print(f"🎉 İşlem Tamam! Toplam {toplam_eklenen} ürün kaydedildi.")
+    print(f"🎉 İşlem Tamam! Toplam {toplam_eklenen} ürün güvenle kaydedildi.")
